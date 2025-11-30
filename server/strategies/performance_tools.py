@@ -1,131 +1,88 @@
 """
-Performance Comparison Tools for All Trading Strategies
-This module adds performance comparison functionality to each strategy.
+Performance comparison tools for all trading strategies.
+This module provides backtesting and performance analysis for each strategy.
+
+STRATEGIES INCLUDED (4 total):
+1. Bollinger Bands & Fibonacci Retracement
+2. MACD-Donchian Combined
+3. Connors RSI & Z-Score Combined
+4. Dual Moving Average Crossover
+
+NOTE: Bollinger Z-Score is intentionally NOT included in comprehensive analysis.
 """
 
-import pandas as pd
-import numpy as np
-import yfinance as yf
-from typing import Dict, Tuple, List, Callable
-from datetime import datetime
 import re
-import sys
-import os
+from datetime import datetime
+from typing import Dict, List
 
-# Add the utils directory to the path so we can import yahoo_finance_tools
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'utils'))
+import numpy as np
+import pandas as pd
+import yfinance as yf
+
+# Store strategy functions for comprehensive analysis
+STRATEGY_FUNCTIONS: Dict = {}
 
 
-STRATEGY_FUNCTIONS: Dict[str, Callable[..., str]] = {}
-
-def calculate_strategy_performance_metrics(signals_data: pd.DataFrame, signal_column: str = 'Signal') -> Dict:
-    """
-    Calculate comprehensive strategy performance metrics vs buy-and-hold
+def calculate_strategy_performance_metrics(data: pd.DataFrame, signal_column: str) -> Dict:
+    """Calculate comprehensive performance metrics for a strategy"""
     
-    Parameters:
-    signals_data (pd.DataFrame): DataFrame with price data and signals
-    signal_column (str): Name of the column containing trading signals
+    # Calculate daily returns
+    data = data.copy()
+    data['Daily_Return'] = data['Close'].pct_change()
     
-    Returns:
-    Dict: Performance metrics dictionary
-    """
-    data = signals_data.copy()
+    # Calculate strategy returns (assumes we're in position when signal is BUY)
+    data['Position'] = 0
+    data.loc[data[signal_column] == 'BUY', 'Position'] = 1
+    data.loc[data[signal_column] == 'SELL', 'Position'] = -1
     
-    # Ensure we have required columns
-    if 'Close' not in data.columns:
-        raise ValueError("DataFrame must contain 'Close' column")
+    # Forward fill positions (stay in position until next signal)
+    data['Position'] = data['Position'].replace(0, np.nan).ffill().fillna(0)
     
-    # Calculate price returns
-    data['Price_Return'] = data['Close'].pct_change()
+    # Strategy returns = position * daily return (shifted to avoid look-ahead bias)
+    data['Strategy_Return'] = data['Position'].shift(1) * data['Daily_Return']
     
-    # Convert signals to positions
-    if signal_column in data.columns:
-        # Map signals to positions
-        data['Position'] = 0
-        if 'BUY' in data[signal_column].values or 'SELL' in data[signal_column].values:
-            data.loc[data[signal_column] == 'BUY', 'Position'] = 1
-            data.loc[data[signal_column] == 'SELL', 'Position'] = -1
-        else:
-            # For score-based strategies, use score thresholds
-            score_col = 'Strategy_Score' if 'Strategy_Score' in data.columns else signal_column
-            if score_col in data.columns:
-                data['Position'] = np.where(data[score_col] > 20, 1, 
-                                          np.where(data[score_col] < -20, -1, 0))
-        
-        # Forward fill positions
-        data['Position'] = data['Position'].replace(0, np.nan).ffill().fillna(0)
-    else:
-        # If no signal column, assume buy and hold
-        data['Position'] = 1
-    
-    # Calculate strategy returns
-    data['Strategy_Return'] = data['Position'].shift(1) * data['Price_Return']
-    data['Cumulative_Strategy'] = (1 + data['Strategy_Return']).cumprod()
-    data['Cumulative_BuyHold'] = (1 + data['Price_Return']).cumprod()
+    # Calculate cumulative returns
+    data['Cumulative_Strategy'] = (1 + data['Strategy_Return'].fillna(0)).cumprod()
+    data['Cumulative_BuyHold'] = (1 + data['Daily_Return'].fillna(0)).cumprod()
     
     # Performance metrics
-    total_strategy_return = data['Cumulative_Strategy'].iloc[-1] - 1
-    total_buyhold_return = data['Cumulative_BuyHold'].iloc[-1] - 1
-    excess_return = total_strategy_return - total_buyhold_return
+    strategy_return = data['Cumulative_Strategy'].iloc[-1] - 1
+    buyhold_return = data['Cumulative_BuyHold'].iloc[-1] - 1
+    excess_return = strategy_return - buyhold_return
     
     # Risk metrics
     strategy_volatility = data['Strategy_Return'].std() * np.sqrt(252)
-    buyhold_volatility = data['Price_Return'].std() * np.sqrt(252)
+    buyhold_volatility = data['Daily_Return'].std() * np.sqrt(252)
     
-    # Sharpe ratios (assuming 0% risk-free rate)
+    # Sharpe Ratio (assuming 0% risk-free rate for simplicity)
     strategy_sharpe = (data['Strategy_Return'].mean() * 252) / strategy_volatility if strategy_volatility > 0 else 0
-    buyhold_sharpe = (data['Price_Return'].mean() * 252) / buyhold_volatility if buyhold_volatility > 0 else 0
+    buyhold_sharpe = (data['Daily_Return'].mean() * 252) / buyhold_volatility if buyhold_volatility > 0 else 0
     
-    # Maximum drawdown
-    def calculate_max_drawdown(cumulative_returns):
-        running_max = cumulative_returns.expanding().max()
-        drawdown = (cumulative_returns - running_max) / running_max
-        return drawdown.min()
+    # Maximum Drawdown
+    strategy_cummax = data['Cumulative_Strategy'].cummax()
+    strategy_drawdown = (data['Cumulative_Strategy'] - strategy_cummax) / strategy_cummax
+    strategy_max_dd = strategy_drawdown.min()
     
-    strategy_max_dd = calculate_max_drawdown(data['Cumulative_Strategy'])
-    buyhold_max_dd = calculate_max_drawdown(data['Cumulative_BuyHold'])
+    buyhold_cummax = data['Cumulative_BuyHold'].cummax()
+    buyhold_drawdown = (data['Cumulative_BuyHold'] - buyhold_cummax) / buyhold_cummax
+    buyhold_max_dd = buyhold_drawdown.min()
     
-    # Win rate and trade statistics
-    trades = data[data[signal_column].notna()].copy() if signal_column in data.columns else pd.DataFrame()
-    
-    win_rate = 0
-    total_trades = 0
-    avg_trade_return = 0
-    
+    # Win rate calculation
+    trades = data[data[signal_column].isin(['BUY', 'SELL'])].copy()
     if len(trades) > 1:
-        trade_returns = []
-        position = 0
-        entry_price = 0
-        
-        for idx, row in trades.iterrows():
-            current_signal = row[signal_column] if signal_column in trades.columns else None
-            current_price = row['Close']
-            
-            if current_signal == 'BUY' and position <= 0:
-                if position < 0 and entry_price > 0:
-                    # Close short position
-                    trade_return = (entry_price - current_price) / entry_price
-                    trade_returns.append(trade_return)
-                # Open long position
-                entry_price = current_price
-                position = 1
-            elif current_signal == 'SELL' and position >= 0:
-                if position > 0 and entry_price > 0:
-                    # Close long position
-                    trade_return = (current_price - entry_price) / entry_price
-                    trade_returns.append(trade_return)
-                # Open short position
-                entry_price = current_price
-                position = -1
-        
-        if trade_returns:
-            win_rate = len([r for r in trade_returns if r > 0]) / len(trade_returns)
-            total_trades = len(trade_returns)
-            avg_trade_return = np.mean(trade_returns)
+        trades['Trade_Return'] = trades['Close'].pct_change()
+        winning_trades = (trades['Trade_Return'] > 0).sum()
+        total_trades = len(trades) - 1
+        win_rate = winning_trades / total_trades if total_trades > 0 else 0
+        avg_trade_return = trades['Trade_Return'].mean()
+    else:
+        win_rate = 0
+        total_trades = 0
+        avg_trade_return = 0
     
     return {
-        'strategy_return': total_strategy_return,
-        'buyhold_return': total_buyhold_return,
+        'strategy_return': strategy_return,
+        'buyhold_return': buyhold_return,
         'excess_return': excess_return,
         'strategy_volatility': strategy_volatility,
         'buyhold_volatility': buyhold_volatility,
@@ -138,6 +95,7 @@ def calculate_strategy_performance_metrics(signals_data: pd.DataFrame, signal_co
         'avg_trade_return': avg_trade_return,
         'trading_days': len(data)
     }
+
 
 def format_performance_report(metrics: Dict, strategy_name: str, symbol: str, period: str) -> str:
     """Format performance metrics into a readable report"""
@@ -173,6 +131,12 @@ RISK-ADJUSTED PERFORMANCE:
 STRATEGY VERDICT: {'OUTPERFORMS' if metrics['excess_return'] > 0 and metrics['strategy_sharpe'] > metrics['buyhold_sharpe'] else 'UNDERPERFORMS'} Buy & Hold
 """
     return report
+
+
+# =============================================================================
+# BOLLINGER Z-SCORE PERFORMANCE TOOL
+# Note: This tool is still registered but NOT used in comprehensive analysis
+# =============================================================================
 
 def add_bollinger_zscore_performance_tool(mcp):
     """Add performance comparison tool for Bollinger Z-Score strategy"""
@@ -232,6 +196,11 @@ CURRENT STATUS:
 
     STRATEGY_FUNCTIONS["bollinger_zscore"] = analyze_bollinger_zscore_performance
 
+
+# =============================================================================
+# BOLLINGER-FIBONACCI PERFORMANCE TOOL (STRATEGY 1)
+# =============================================================================
+
 def add_bollinger_fibonacci_performance_tool(mcp):
     """Add performance comparison tool for Bollinger-Fibonacci strategy"""
     
@@ -250,42 +219,36 @@ def add_bollinger_fibonacci_performance_tool(mcp):
         symbol (str): Stock ticker symbol
         period (str): Data period for analysis
         window (int): Bollinger Bands window
-        num_std (int): Standard deviations for Bollinger Bands
+        num_std (int): Standard deviations for bands
         window_swing_points (int): Window for swing point detection
         
         Returns:
         str: Performance comparison report
         """
         try:
-            from yahoo_finance_tools import calculate_bollinger_bands, find_swing_points, calculate_fibonacci_levels
-            
             # Fetch data
             data = yf.download(symbol, period=period, progress=False, multi_level_index=False)
             if data.empty:
                 return f"Error: No data found for symbol {symbol}"
             
             # Calculate Bollinger Bands
-            calculate_bollinger_bands(data, symbol, period, window, num_std)
+            closes = data["Close"]
+            rolling_mean = closes.rolling(window=window).mean()
+            rolling_std = closes.rolling(window=window).std()
+            upper_band = rolling_mean + (num_std * rolling_std)
+            lower_band = rolling_mean - (num_std * rolling_std)
             
-            # Find swing points
-            find_swing_points(data, window_swing_points)
+            # Calculate %B (position within bands)
+            percent_b = (closes - lower_band) / (upper_band - lower_band)
             
-            # Calculate Fibonacci levels
-            fib_levels, fib_trend = calculate_fibonacci_levels(data, window_swing_points)
+            # Generate Bollinger-Fibonacci score
+            bb_score = (0.5 - percent_b) * 100  # Inverted: oversold = positive
             
-            if fib_levels is None:
-                return "Unable to calculate Fibonacci levels for performance analysis"
-            
-            # Calculate strategy scores (simplified version)
-            data["Strategy_Score"] = 0.0
-            
-            # Basic scoring based on %B and Fibonacci proximity
-            data["Strategy_Score"] = (0.5 - data["%B"]) * 50  # Bollinger component
-            
-            # Generate signals based on strategy score
+            # Generate signals
+            data['BB_Score'] = bb_score
             data['Signal'] = None
-            data.loc[data['Strategy_Score'] > 20, 'Signal'] = 'BUY'
-            data.loc[data['Strategy_Score'] < -20, 'Signal'] = 'SELL'
+            data.loc[bb_score > 25, 'Signal'] = 'BUY'   # Oversold
+            data.loc[bb_score < -25, 'Signal'] = 'SELL'  # Overbought
             
             # Calculate performance metrics
             metrics = calculate_strategy_performance_metrics(data, 'Signal')
@@ -293,15 +256,17 @@ def add_bollinger_fibonacci_performance_tool(mcp):
             # Generate report
             report = format_performance_report(metrics, "Bollinger-Fibonacci", symbol, period)
             
-            # Add current status
-            current_score = data['Strategy_Score'].iloc[-1] if not data['Strategy_Score'].isna().iloc[-1] else 0
-            current_signal = "BUY" if current_score > 20 else "SELL" if current_score < -20 else "HOLD"
+            # Add current signal
+            current_bb_score = bb_score.iloc[-1] if not bb_score.isna().iloc[-1] else 0
+            current_percent_b = percent_b.iloc[-1] if not percent_b.isna().iloc[-1] else 0.5
+            current_signal = "BUY" if current_bb_score > 25 else "SELL" if current_bb_score < -25 else "HOLD"
             
             report += f"""
 CURRENT STATUS:
-• Current Strategy Score: {current_score:.2f}
+• Current %B: {current_percent_b:.2%}
+• Current BB Score: {current_bb_score:.2f}
 • Current Signal: {current_signal}
-• Fibonacci Trend: {fib_trend}
+• Band Position: {"Below Lower Band (Oversold)" if current_percent_b < 0 else "Above Upper Band (Overbought)" if current_percent_b > 1 else "Within Bands"}
 • Strategy Recommendation: {"Enter Long Position" if current_signal == "BUY" else "Enter Short Position" if current_signal == "SELL" else "Hold Current Position"}
             """
             
@@ -312,8 +277,13 @@ CURRENT STATUS:
 
     STRATEGY_FUNCTIONS["bollinger_fibonacci"] = analyze_bollinger_fibonacci_performance
 
+
+# =============================================================================
+# MACD-DONCHIAN PERFORMANCE TOOL (STRATEGY 2)
+# =============================================================================
+
 def add_macd_donchian_performance_tool(mcp):
-    """Add performance comparison tool for MACD-Donchian strategy - FIXED VERSION"""
+    """Add performance comparison tool for MACD-Donchian strategy"""
     
     @mcp.tool()
     def analyze_macd_donchian_performance(
@@ -325,7 +295,7 @@ def add_macd_donchian_performance_tool(mcp):
         window: int = 20,
     ) -> str:
         """
-        Analyze MACD-Donchian strategy performance vs Buy & Hold - FIXED VERSION
+        Analyze MACD-Donchian strategy performance vs Buy & Hold
         
         Parameters:
         symbol (str): Stock ticker symbol
@@ -339,10 +309,6 @@ def add_macd_donchian_performance_tool(mcp):
         str: Performance comparison report
         """
         try:
-            import yfinance as yf
-            import pandas as pd
-            import numpy as np
-            
             # Fetch data
             data = yf.download(symbol, period=period, progress=False, multi_level_index=False)
             if data.empty:
@@ -355,197 +321,68 @@ def add_macd_donchian_performance_tool(mcp):
             signal_line = macd_line.ewm(span=signal_period, adjust=False).mean()
             macd_histogram = macd_line - signal_line
             
-            # Calculate MACD score components
+            # Calculate Donchian Channels
+            upper_channel = data["High"].rolling(window=window).max()
+            lower_channel = data["Low"].rolling(window=window).min()
+            channel_mid = (upper_channel + lower_channel) / 2
+            
+            # Position within Donchian channel (0 to 1)
+            position_pct = (data["Close"] - lower_channel) / (upper_channel - lower_channel)
+            
+            # Calculate MACD score
             typical_range = macd_line.std() * 3
             if typical_range == 0:
                 typical_range = 0.001
             
-            # MACD score calculation (matching your existing tool)
             line_position = (macd_line - signal_line) / typical_range
-            component1 = line_position.clip(-1, 1) * 40
+            macd_score = line_position.clip(-1, 1) * 50
             
-            zero_position = macd_line / typical_range
-            component2 = zero_position.clip(-1, 1) * 30
+            # Calculate Donchian score
+            donchian_score = (position_pct - 0.5) * 100
             
-            hist_change = macd_histogram.diff(3).rolling(window=3).mean()
-            hist_typical_range = hist_change.std() * 3
-            if hist_typical_range == 0:
-                hist_typical_range = 0.001
+            # Combined score
+            combined_score = (macd_score * 0.6) + (donchian_score * 0.4)
             
-            hist_momentum = hist_change / hist_typical_range
-            component3 = hist_momentum.clip(-1, 1) * 30
-            
-            macd_score = component1 + component2 + component3
-            
-            # Calculate Donchian Channel components
-            upper_band = data["High"].rolling(window=window).max()
-            lower_band = data["Low"].rolling(window=window).min()
-            middle_band = (upper_band + lower_band) / 2
-            
-            # Donchian score calculation (matching your existing tool)
-            channel_width = upper_band - lower_band
-            channel_width = channel_width.replace(0, 0.001)
-            
-            position_pct = (data["Close"] - lower_band) / channel_width
-            d_component1 = ((position_pct * 2) - 1) * 50
-            
-            channel_direction = middle_band.diff(5).rolling(window=5).mean()
-            channel_direction_range = channel_direction.std() * 3
-            if channel_direction_range == 0:
-                channel_direction_range = 0.001
-            
-            normalized_direction = channel_direction / channel_direction_range
-            d_component2 = normalized_direction.clip(-1, 1) * 30
-            
-            width_change = channel_width.diff(5).rolling(window=5).mean()
-            width_change_range = width_change.std() * 3
-            if width_change_range == 0:
-                width_change_range = 0.001
-            
-            normalized_width = width_change / width_change_range
-            d_component3 = normalized_width.clip(-1, 1) * 20
-            
-            donchian_score = d_component1 + d_component2 + d_component3
-            
-            # Combined score (equal weight)
-            combined_score = (macd_score + donchian_score) / 2
+            # Generate signals
             data['Combined_Score'] = combined_score
-            
-            # Generate trading signals based on combined score thresholds
             data['Signal'] = None
             data.loc[combined_score > 25, 'Signal'] = 'BUY'
             data.loc[combined_score < -25, 'Signal'] = 'SELL'
-            # Add HOLD signals for intermediate values
-            data.loc[(combined_score >= -25) & (combined_score <= 25), 'Signal'] = 'HOLD'
             
-            # Forward fill signals to create positions
-            data['Position'] = 0
-            data.loc[data['Signal'] == 'BUY', 'Position'] = 1
-            data.loc[data['Signal'] == 'SELL', 'Position'] = -1
-            data.loc[data['Signal'] == 'HOLD', 'Position'] = 0
-            
-            # Forward fill positions (hold position until next signal)
-            data['Position'] = data['Position'].replace(0, np.nan)
-            data['Position'] = data['Position'].ffill().fillna(0)
-            
-            # Calculate returns
-            data['Price_Return'] = data['Close'].pct_change()
-            data['Strategy_Return'] = data['Position'].shift(1) * data['Price_Return']
-            data['Cumulative_Strategy'] = (1 + data['Strategy_Return']).cumprod()
-            data['Cumulative_BuyHold'] = (1 + data['Price_Return']).cumprod()
-            
-            # Performance metrics
-            total_strategy_return = data['Cumulative_Strategy'].iloc[-1] - 1
-            total_buyhold_return = data['Cumulative_BuyHold'].iloc[-1] - 1
-            excess_return = total_strategy_return - total_buyhold_return
-            
-            # Risk metrics
-            strategy_volatility = data['Strategy_Return'].std() * np.sqrt(252)
-            buyhold_volatility = data['Price_Return'].std() * np.sqrt(252)
-            
-            # Sharpe ratios
-            strategy_sharpe = (data['Strategy_Return'].mean() * 252) / strategy_volatility if strategy_volatility > 0 else 0
-            buyhold_sharpe = (data['Price_Return'].mean() * 252) / buyhold_volatility if buyhold_volatility > 0 else 0
-            
-            # Maximum drawdown
-            def calculate_max_drawdown(cumulative_returns):
-                running_max = cumulative_returns.expanding().max()
-                drawdown = (cumulative_returns - running_max) / running_max
-                return drawdown.min()
-            
-            strategy_max_dd = calculate_max_drawdown(data['Cumulative_Strategy'])
-            buyhold_max_dd = calculate_max_drawdown(data['Cumulative_BuyHold'])
-            
-            # Trading statistics
-            signals = data[data['Signal'].notna() & (data['Signal'] != 'HOLD')]
-            total_signals = len(signals)
-            buy_signals = len(signals[signals['Signal'] == 'BUY'])
-            sell_signals = len(signals[signals['Signal'] == 'SELL'])
-            
-            # Calculate trade returns for win rate
-            trade_returns = []
-            position = 0
-            entry_price = 0
-            
-            for idx, row in signals.iterrows():
-                current_signal = row['Signal']
-                current_price = row['Close']
-                
-                if current_signal == 'BUY' and position <= 0:
-                    if position < 0 and entry_price > 0:
-                        # Close short position
-                        trade_return = (entry_price - current_price) / entry_price
-                        trade_returns.append(trade_return)
-                    # Open long position
-                    entry_price = current_price
-                    position = 1
-                elif current_signal == 'SELL' and position >= 0:
-                    if position > 0 and entry_price > 0:
-                        # Close long position
-                        trade_return = (current_price - entry_price) / entry_price
-                        trade_returns.append(trade_return)
-                    # Open short position
-                    entry_price = current_price
-                    position = -1
-            
-            win_rate = len([r for r in trade_returns if r > 0]) / len(trade_returns) if trade_returns else 0
-            avg_trade_return = np.mean(trade_returns) if trade_returns else 0
-            
-            # Current status
-            current_combined_score = combined_score.iloc[-1]
-            current_macd_score = macd_score.iloc[-1]
-            current_donchian_score = donchian_score.iloc[-1]
-            current_signal = data['Signal'].iloc[-1] if pd.notna(data['Signal'].iloc[-1]) else "HOLD"
+            # Calculate performance metrics
+            metrics = calculate_strategy_performance_metrics(data, 'Signal')
             
             # Generate report
-            report = f"""
-PERFORMANCE COMPARISON: MACD-DONCHIAN STRATEGY
-{'='*60}
-Symbol: {symbol} | Period: {period} | Trading Days: {len(data)}
-
-RETURNS ANALYSIS:
-• Strategy Total Return: {total_strategy_return:.2%}
-• Buy & Hold Return: {total_buyhold_return:.2%}
-• Excess Return: {excess_return:.2%}
-• Outperformance: {'YES' if excess_return > 0 else 'NO'} by {abs(excess_return):.2%}
-
-RISK ANALYSIS:
-• Strategy Volatility: {strategy_volatility:.2%}
-• Buy & Hold Volatility: {buyhold_volatility:.2%}
-• Strategy Sharpe Ratio: {strategy_sharpe:.3f}
-• Buy & Hold Sharpe Ratio: {buyhold_sharpe:.3f}
-• Strategy Max Drawdown: {strategy_max_dd:.2%}
-• Buy & Hold Max Drawdown: {buyhold_max_dd:.2%}
-
-TRADING STATISTICS:
-• Total Trades: {len(trade_returns)}
-• Total Signals: {total_signals} (Buy: {buy_signals}, Sell: {sell_signals})
-• Win Rate: {win_rate:.2%}
-• Average Return per Trade: {avg_trade_return:.2%}
-
-RISK-ADJUSTED PERFORMANCE:
-• Return/Risk Ratio: {total_strategy_return/strategy_volatility if strategy_volatility > 0 else 0:.3f}
-• Buy & Hold Return/Risk: {total_buyhold_return/buyhold_volatility if buyhold_volatility > 0 else 0:.3f}
-
+            report = format_performance_report(metrics, "MACD-Donchian", symbol, period)
+            
+            # Current values
+            current_macd_score = macd_score.iloc[-1] if not macd_score.isna().iloc[-1] else 0
+            current_donchian_score = donchian_score.iloc[-1] if not donchian_score.isna().iloc[-1] else 0
+            current_combined = combined_score.iloc[-1] if not combined_score.isna().iloc[-1] else 0
+            current_signal = "BUY" if current_combined > 25 else "SELL" if current_combined < -25 else "HOLD"
+            
+            report += f"""
 CURRENT STATUS:
-• Current Combined Score: {current_combined_score:.2f}
 • Current MACD Score: {current_macd_score:.2f}
 • Current Donchian Score: {current_donchian_score:.2f}
+• Combined Score: {current_combined:.2f}
 • Current Signal: {current_signal}
 • MACD Position: {"Above Signal" if macd_line.iloc[-1] > signal_line.iloc[-1] else "Below Signal"}
 • Donchian Position: {position_pct.iloc[-1]:.2%} of channel range
-
-STRATEGY VERDICT: {'OUTPERFORMS' if excess_return > 0 and strategy_sharpe > buyhold_sharpe else 'UNDERPERFORMS'} Buy & Hold
-
-RECOMMENDATION: {"Enter Long Position" if current_signal == "BUY" else "Enter Short Position" if current_signal == "SELL" else "Hold Current Position"}
+• Strategy Recommendation: {"Enter Long Position" if current_signal == "BUY" else "Enter Short Position" if current_signal == "SELL" else "Hold Current Position"}
             """
             
             return report
             
         except Exception as e:
-            return f"Error analyzing MACD-Donchian strategy for {symbol}: {str(e)}\nDetailed error: {type(e).__name__}"
+            return f"Error analyzing MACD-Donchian strategy for {symbol}: {str(e)}"
 
     STRATEGY_FUNCTIONS["macd_donchian"] = analyze_macd_donchian_performance
+
+
+# =============================================================================
+# CONNORS RSI-ZSCORE PERFORMANCE TOOL (STRATEGY 3)
+# =============================================================================
 
 def add_connors_zscore_performance_tool(mcp):
     """Add performance comparison tool for Connors RSI-Z Score strategy"""
@@ -583,18 +420,17 @@ def add_connors_zscore_performance_tool(mcp):
             if data.empty:
                 return f"Error: No data found for symbol {symbol}"
             
-            # Calculate Connors RSI components
             close = data['Close']
             
-            # Simple RSI calculation
+            # Calculate RSI
             delta = close.diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=rsi_period).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=rsi_period).mean()
             rs = gain / loss
             price_rsi = 100 - (100 / (1 + rs))
             
-            # Combined Connors RSI (simplified)
-            connors_rsi = price_rsi  # Simplified version
+            # Connors RSI score (simplified)
+            connors_rsi = price_rsi
             connors_score = (connors_rsi - 50) * 2  # Convert to ±100 scale
             
             # Z-Score calculation
@@ -605,9 +441,9 @@ def add_connors_zscore_performance_tool(mcp):
             
             # Combined score
             combined_score = (connors_score * connors_weight) + (zscore_score * zscore_weight)
-            data['Combined_Score'] = combined_score
             
             # Generate signals
+            data['Combined_Score'] = combined_score
             data['Signal'] = None
             data.loc[combined_score > 25, 'Signal'] = 'BUY'
             data.loc[combined_score < -25, 'Signal'] = 'SELL'
@@ -618,16 +454,18 @@ def add_connors_zscore_performance_tool(mcp):
             # Generate report
             report = format_performance_report(metrics, "Connors RSI-Z Score", symbol, period)
             
-            # Add current status
-            current_score = combined_score.iloc[-1] if not combined_score.isna().iloc[-1] else 0
-            current_signal = "BUY" if current_score > 25 else "SELL" if current_score < -25 else "HOLD"
+            # Current values
+            current_connors = connors_rsi.iloc[-1] if not connors_rsi.isna().iloc[-1] else 50
+            current_zscore = zscore.iloc[-1] if not zscore.isna().iloc[-1] else 0
+            current_combined = combined_score.iloc[-1] if not combined_score.isna().iloc[-1] else 0
+            current_signal = "BUY" if current_combined > 25 else "SELL" if current_combined < -25 else "HOLD"
             
             report += f"""
 CURRENT STATUS:
-• Current Combined Score: {current_score:.2f}
+• Current Connors RSI: {current_connors:.2f}
+• Current Z-Score: {current_zscore:.2f}
+• Combined Score: {current_combined:.2f}
 • Current Signal: {current_signal}
-• Connors RSI: {connors_rsi.iloc[-1]:.2f}
-• Z-Score: {zscore.iloc[-1]:.2f}
 • Strategy Recommendation: {"Enter Long Position" if current_signal == "BUY" else "Enter Short Position" if current_signal == "SELL" else "Hold Current Position"}
             """
             
@@ -638,13 +476,167 @@ CURRENT STATUS:
 
     STRATEGY_FUNCTIONS["connors_zscore"] = analyze_connors_zscore_performance
 
+
+# =============================================================================
+# DUAL MOVING AVERAGE PERFORMANCE TOOL (STRATEGY 4)
+# =============================================================================
+
+def add_dual_ma_performance_tool(mcp):
+    """Add performance comparison tool for Dual Moving Average strategy"""
+    
+    @mcp.tool()
+    def analyze_dual_ma_strategy(
+        symbol: str,
+        period: str = "1y",
+        short_period: int = 50,
+        long_period: int = 200,
+        ma_type: str = "EMA",
+    ) -> str:
+        """
+        Analyze Dual Moving Average Crossover strategy performance vs Buy & Hold
+        
+        Parameters:
+        symbol (str): Stock ticker symbol
+        period (str): Data period for analysis
+        short_period (int): Short MA period (default: 50)
+        long_period (int): Long MA period (default: 200)
+        ma_type (str): Moving average type - SMA or EMA (default: EMA)
+        
+        Returns:
+        str: Performance comparison report with crossover signals
+        """
+        try:
+            # Fetch data
+            data = yf.download(symbol, period=period, progress=False, multi_level_index=False)
+            if data.empty:
+                return f"Error: No data found for symbol {symbol}"
+            
+            closes = data["Close"]
+            
+            # Calculate moving averages
+            if ma_type.upper() == "EMA":
+                short_ma = closes.ewm(span=short_period, adjust=False).mean()
+                long_ma = closes.ewm(span=long_period, adjust=False).mean()
+            else:  # SMA
+                short_ma = closes.rolling(window=short_period).mean()
+                long_ma = closes.rolling(window=long_period).mean()
+            
+            data['Short_MA'] = short_ma
+            data['Long_MA'] = long_ma
+            
+            # Generate crossover signals
+            data['Signal'] = None
+            
+            # Golden Cross (short crosses above long) = BUY
+            golden_cross = (short_ma > long_ma) & (short_ma.shift(1) <= long_ma.shift(1))
+            data.loc[golden_cross, 'Signal'] = 'BUY'
+            
+            # Death Cross (short crosses below long) = SELL
+            death_cross = (short_ma < long_ma) & (short_ma.shift(1) >= long_ma.shift(1))
+            data.loc[death_cross, 'Signal'] = 'SELL'
+            
+            # Calculate performance metrics
+            metrics = calculate_strategy_performance_metrics(data, 'Signal')
+            
+            # Count signals
+            golden_crosses = golden_cross.sum()
+            death_crosses = death_cross.sum()
+            
+            # Get recent signals
+            signal_dates = data[data['Signal'].notna()][['Signal']].tail(5)
+            recent_signals = []
+            for date, row in signal_dates.iterrows():
+                signal_type = "Golden Cross - BUY" if row['Signal'] == 'BUY' else "Death Cross - SELL"
+                price = closes.loc[date]
+                recent_signals.append(f"• {date.strftime('%Y-%m-%d')}: {signal_type} at ${price:.2f}")
+            
+            # Current position
+            current_short = short_ma.iloc[-1]
+            current_long = long_ma.iloc[-1]
+            current_price = closes.iloc[-1]
+            trend_strength = abs(current_short - current_long) / current_long * 100
+            
+            if current_short > current_long:
+                current_position = "LONG"
+                trend = "BULLISH 🟢"
+            else:
+                current_position = "SHORT"
+                trend = "BEARISH 🔴"
+            
+            # Determine current signal based on position
+            if current_position == "LONG":
+                current_signal = "BUY"
+            else:
+                current_signal = "SELL"
+            
+            # Generate report
+            report = f"""
+DUAL MOVING AVERAGE ANALYSIS - {symbol.upper()}
+{'='*50}
+STRATEGY PARAMETERS:
+• Moving Average Type: {ma_type.upper()}
+• Short Period: {short_period} days
+• Long Period: {long_period} days
+• Analysis Period: {period}
+
+CURRENT STATUS:
+• Current Price: ${current_price:.2f}
+• {short_period}-day {ma_type.upper()}: ${current_short:.2f}
+• {long_period}-day {ma_type.upper()}: ${current_long:.2f}
+• Current Position: {current_position}
+• Current Signal: {current_signal}
+• Trend: {trend}
+• Trend Strength: {trend_strength:.2f}%
+
+PERFORMANCE METRICS:
+• Strategy Return: {metrics['strategy_return']:.2%}
+• Buy & Hold Return: {metrics['buyhold_return']:.2%}
+• Excess Return: {metrics['excess_return']:.2%}
+• Win Rate: {metrics['win_rate']:.2%}
+• Total Trades: {metrics['total_trades']}
+• Sharpe Ratio: {metrics['strategy_sharpe']:.3f}
+• Max Drawdown: {metrics['strategy_max_drawdown']:.2%}
+• Strategy Volatility: {metrics['strategy_volatility']:.2%}
+
+SIGNAL SUMMARY:
+• Golden Cross (Buy) Signals: {golden_crosses}
+• Death Cross (Sell) Signals: {death_crosses}
+
+Recent Signals:
+{chr(10).join(recent_signals) if recent_signals else "• No recent signals"}
+
+MARKET CONDITION:
+{"Strong uptrend - MAs show bullish alignment" if trend_strength > 5 and current_position == "LONG" else "Strong downtrend - MAs show bearish alignment" if trend_strength > 5 and current_position == "SHORT" else "Moderate uptrend - MAs show bullish alignment" if current_position == "LONG" else "Moderate downtrend - MAs show bearish alignment"}
+
+STRATEGY VERDICT: {'OUTPERFORMS' if metrics['excess_return'] > 0 else 'UNDERPERFORMS'} Buy & Hold
+"""
+            
+            return report
+            
+        except Exception as e:
+            return f"Error analyzing Dual MA strategy for {symbol}: {str(e)}"
+
+    STRATEGY_FUNCTIONS["dual_ma"] = analyze_dual_ma_strategy
+
+
+# =============================================================================
+# COMPREHENSIVE ANALYSIS TOOL
+# This tool runs all 4 strategies (NOT including bollinger_zscore)
+# =============================================================================
+
 def add_comprehensive_analysis_tool(mcp):
     """Add tool for comprehensive multi-strategy analysis with performance comparison"""
     
     @mcp.tool()
     def generate_comprehensive_analysis_report(symbol: str, period: str = "1y") -> str:
         """
-        Generate a comprehensive analysis report comparing all strategies with performance metrics
+        Generate a comprehensive analysis report comparing all 4 core strategies.
+        
+        Strategies included:
+        1. Bollinger Bands & Fibonacci Retracement
+        2. MACD-Donchian Combined
+        3. Connors RSI & Z-Score Combined
+        4. Dual Moving Average Crossover
         
         Parameters:
         symbol (str): Stock ticker symbol to analyze
@@ -673,12 +665,10 @@ def add_comprehensive_analysis_tool(mcp):
             match = pattern.search(text)
             return match.group(1).strip().upper() if match else fallback
 
+        # =================================================================
+        # STRATEGIES LIST - 4 STRATEGIES (NO bollinger_zscore)
+        # =================================================================
         strategies = [
-            (
-                "bollinger_zscore",
-                "Bollinger Z-Score Analysis (20-Day Period)",
-                {"period": period, "window": 20},
-            ),
             (
                 "bollinger_fibonacci",
                 "Bollinger Bands & Fibonacci Retracement Strategy",
@@ -708,6 +698,16 @@ def add_comprehensive_analysis_tool(mcp):
                     "zscore_weight": 0.3,
                 },
             ),
+            (
+                "dual_ma",
+                "Dual Moving Average Crossover Strategy",
+                {
+                    "period": period,
+                    "short_period": 50,
+                    "long_period": 200,
+                    "ma_type": "EMA",
+                },
+            ),
         ]
 
         highlights: List[str] = []
@@ -718,53 +718,33 @@ def add_comprehensive_analysis_tool(mcp):
             func = STRATEGY_FUNCTIONS.get(key)
             if not func:
                 content = f"Strategy '{title}' is not registered on the MCP server."
+                signal = "N/A"
+                verdict = "UNAVAILABLE"
             else:
                 try:
-                    content = func(symbol=symbol, **params)
-                except Exception as exc:  # noqa: BLE001
+                    content = func(symbol, **params)
+                    signal = extract_value(content, signal_pattern, "N/A")
+                    verdict = extract_value(content, verdict_pattern, "N/A")
+                except Exception as exc:
                     content = f"Error executing {title}: {exc}"
+                    signal = "ERROR"
+                    verdict = "ERROR"
 
-            first_line = next((line.strip() for line in content.splitlines() if line.strip()), "No data returned")
-            highlights.append(f"- **{title}:** {first_line}")
+            highlights.append(f"- **{title}**: {signal} ({verdict})")
+            sections.append(f"### {title}\n\n```\n{content}\n```\n")
+            strategy_details.append({"title": title, "signal": signal, "verdict": verdict})
 
-            sections.append(f"### {title}\n")
-            sections.append(content)
-            sections.append("")
-
-            signal = extract_value(content, signal_pattern, "UNKNOWN")
-            verdict_raw = verdict_pattern.search(content)
-            verdict = verdict_raw.group(1).strip() if verdict_raw else "No verdict provided"
-            strategy_details.append({
-                "title": title,
-                "signal": signal,
-                "verdict": verdict,
-                "content": content,
-            })
-
-        signal_counts: Dict[str, int] = {}
-        for detail in strategy_details:
-            signal = detail["signal"]
-            if signal and signal != "UNKNOWN":
-                signal_counts[signal] = signal_counts.get(signal, 0) + 1
-
-        total_votes = sum(signal_counts.values())
-        if not signal_counts:
-            recommendation = "Signals are unavailable or inconsistent across strategies. Maintain neutral stance until fresh data arrives."
+        # Generate recommendation based on signals
+        buy_count = sum(1 for d in strategy_details if d["signal"] == "BUY")
+        sell_count = sum(1 for d in strategy_details if d["signal"] == "SELL")
+        hold_count = sum(1 for d in strategy_details if d["signal"] == "HOLD")
+        
+        if buy_count > sell_count and buy_count >= 2:
+            recommendation = f"**BUY** - {buy_count} out of 4 strategies signal buying opportunity."
+        elif sell_count > buy_count and sell_count >= 2:
+            recommendation = f"**SELL** - {sell_count} out of 4 strategies signal selling opportunity."
         else:
-            dominant_signal = max(signal_counts, key=signal_counts.get)
-            dominant_count = signal_counts[dominant_signal]
-            if dominant_signal == "BUY" and dominant_count >= 2:
-                recommendation = (
-                    f"Majority of strategies ({dominant_count}/{total_votes}) issue BUY signals. Consider accumulating positions if risk tolerances allow."
-                )
-            elif dominant_signal == "SELL" and dominant_count >= 2:
-                recommendation = (
-                    f"Majority of strategies ({dominant_count}/{total_votes}) issue SELL signals. Consider reducing exposure or hedging positions."
-                )
-            else:
-                recommendation = (
-                    "Signals are mixed with no clear majority. Favor cautious position sizing or wait for confluence before acting."
-                )
+            recommendation = f"**HOLD** - Mixed signals ({buy_count} BUY, {sell_count} SELL, {hold_count} HOLD). Wait for clearer consensus."
 
         signals_breakdown = "\n".join(
             f"- **{detail['title']}** – {detail['signal']} ({detail['verdict']})"
@@ -776,6 +756,21 @@ def add_comprehensive_analysis_tool(mcp):
             f"*Analysis Date: {analysis_date}*  ",
             f"*Current Price: {current_price}*",
             "",
+            "---",
+            "",
+            "📊 **Report Type:** Comprehensive Performance Report (Deterministic)",
+            "",
+            "*This report uses fixed parameters and direct calculations for consistent, reproducible results.*",
+            "",
+            "---",
+            "",
+            "## Executive Summary",
+            f"This report analyzes {symbol.upper()} using 4 technical analysis strategies:",
+            "1. Bollinger Bands & Fibonacci Retracement",
+            "2. MACD-Donchian Combined",
+            "3. Connors RSI & Z-Score Combined",
+            "4. Dual Moving Average Crossover",
+            "",
             "## Strategy Highlights",
             "\n".join(highlights) if highlights else "- No strategy data available.",
             "",
@@ -783,22 +778,32 @@ def add_comprehensive_analysis_tool(mcp):
             "",
             "\n".join(sections).strip(),
             "",
-            "## Conclusion & Recommendations",
-            recommendation,
+            "## Consensus & Recommendation",
+            "",
+            f"**Signal Summary:** {buy_count} BUY | {sell_count} SELL | {hold_count} HOLD",
+            "",
+            f"**Recommendation:** {recommendation}",
             "",
             "### Signals by Strategy",
             signals_breakdown,
             "",
             "---",
             "*This report aggregates the live outputs from each individual strategy tool.*",
+            "*Note: Bollinger Z-Score is not included in this comprehensive analysis.*",
         ]
 
         return "\n".join(part for part in report_parts if part is not None)
 
+
+# =============================================================================
+# REGISTER ALL TOOLS
+# =============================================================================
+
 def add_all_performance_tools(mcp):
     """Add all performance comparison tools to the MCP server"""
-    add_bollinger_zscore_performance_tool(mcp)
+    add_bollinger_zscore_performance_tool(mcp)  # Still available but not in comprehensive
     add_bollinger_fibonacci_performance_tool(mcp)
     add_macd_donchian_performance_tool(mcp)
     add_connors_zscore_performance_tool(mcp)
+    add_dual_ma_performance_tool(mcp)  # Added Dual MA
     add_comprehensive_analysis_tool(mcp)

@@ -1,4 +1,19 @@
-"""Smolagents tool wrappers that proxy to the MCP finance server."""
+"""Smolagents tool wrappers that delegate to the MCP finance server.
+
+#####################################################################
+# STRATEGY TOOLS CONFIGURATION
+#####################################################################
+# This file defines the 4 strategy tools used by the Full Strategy Analysis:
+#
+# 1. bollinger_fibonacci_analysis - Bollinger Bands + Fibonacci Retracement
+# 2. macd_donchian_analysis - MACD + Donchian Channel Breakout
+# 3. connors_zscore_analysis - Connors RSI + Z-Score Mean Reversion
+# 4. dual_moving_average_analysis - 50/200 EMA Crossover (Golden/Death Cross)
+#
+# NOTE: bollinger_zscore_analysis is NOT included in STRATEGY_TOOLS
+#       but is still available as an individual tool in ALL_TOOLS.
+#####################################################################
+"""
 from __future__ import annotations
 
 import logging
@@ -11,6 +26,20 @@ from .mcp_client import configure_session, get_session, shutdown_session
 
 logger = logging.getLogger(__name__)
 
+__all__ = [
+    "STRATEGY_TOOLS",
+    "ALL_TOOLS",
+    "configure_finance_tools",
+    "shutdown_finance_tools",
+    "bollinger_fibonacci_analysis",
+    "macd_donchian_analysis",
+    "connors_zscore_analysis",
+    "dual_moving_average_analysis",
+    "comprehensive_performance_report",
+    "unified_market_scanner",
+    "fundamental_analysis_report",
+]
+
 
 def configure_finance_tools(server_path: str | Path | None = None) -> None:
     """Allow callers to override the default MCP server path before running the agent."""
@@ -18,6 +47,7 @@ def configure_finance_tools(server_path: str | Path | None = None) -> None:
 
 
 def shutdown_finance_tools() -> None:
+    """Cleanly stop the MCP finance server session."""
     shutdown_session()
 
 
@@ -36,35 +66,32 @@ def _call_finance_tool(tool_name: str, parameters: Dict[str, object]) -> str:
         return f"Error calling {tool_name}: {exc}"
 
 
-@tool
-def bollinger_zscore_analysis(symbol: str, period: str = "1y", window: int = 20) -> str:
-    """Run the MCP Bollinger Z-Score performance analysis.
-
-    Args:
-        symbol: Ticker to analyze (e.g. AAPL).
-        period: Historical period string accepted by yfinance.
-        window: Rolling window length used by the MCP tool.
-    """
-    params: Dict[str, object] = {"symbol": _normalize_symbol(symbol), "period": period, "window": window}
-    return _call_finance_tool("analyze_bollinger_zscore_performance", params)
-
+# ---------------------------------------------------------------------------
+# Strategy Analysis Tools (4 strategies for Full Strategy Analysis)
+# ---------------------------------------------------------------------------
 
 @tool
 def bollinger_fibonacci_analysis(
     symbol: str,
     period: str = "1y",
     window: int = 20,
-    num_std: int = 2,
+    num_std: float = 2.0,
     window_swing_points: int = 10,
 ) -> str:
-    """Execute the Bollinger + Fibonacci MCP tool.
+    """Run the Bollinger-Fibonacci combined MCP strategy analysis.
+
+    This strategy combines Bollinger Bands (mean reversion) with Fibonacci 
+    retracement levels (support/resistance) for comprehensive price analysis.
 
     Args:
-        symbol: Ticker to analyze (e.g. TSLA).
-        period: Historical period string accepted by yfinance.
-        window: Bollinger Bands lookback window.
-        num_std: Standard deviations for the upper/lower bands.
-        window_swing_points: Window used for swing-point detection.
+        symbol: Ticker to analyze (e.g., 'AAPL', 'MSFT').
+        period: Historical period string accepted by yfinance (default: '1y').
+        window: Bollinger band lookback window in days (default: 20).
+        num_std: Number of standard deviations for band width (default: 2.0).
+        window_swing_points: Lookback for swing high/low detection (default: 10).
+    
+    Returns:
+        Detailed performance report with signals, metrics, and recommendation.
     """
     params: Dict[str, object] = {
         "symbol": _normalize_symbol(symbol),
@@ -85,15 +112,21 @@ def macd_donchian_analysis(
     signal_period: int = 9,
     window: int = 20,
 ) -> str:
-    """Invoke the MACD + Donchian channel MCP performance comparison tool.
+    """Run the MACD-Donchian combined MCP strategy analysis.
+
+    This strategy combines MACD (momentum/trend) with Donchian Channels 
+    (breakout detection) for trend-following analysis.
 
     Args:
-        symbol: Ticker to analyze.
-        period: Historical period string accepted by yfinance.
-        fast_period: Fast EMA period for MACD.
-        slow_period: Slow EMA period for MACD.
-        signal_period: Signal line EMA period for MACD.
-        window: Donchian channel window.
+        symbol: Ticker to analyze (e.g., 'AAPL', 'MSFT').
+        period: Historical period string accepted by yfinance (default: '1y').
+        fast_period: Fast EMA period for MACD (default: 12).
+        slow_period: Slow EMA period for MACD (default: 26).
+        signal_period: Signal line EMA period for MACD (default: 9).
+        window: Donchian channel window in days (default: 20).
+    
+    Returns:
+        Detailed performance report with signals, metrics, and recommendation.
     """
     params: Dict[str, object] = {
         "symbol": _normalize_symbol(symbol),
@@ -119,15 +152,21 @@ def connors_zscore_analysis(
 ) -> str:
     """Run the Connors RSI + Z-Score combined MCP analyzer.
 
+    This strategy combines Connors RSI (short-term momentum) with Z-Score 
+    (statistical mean reversion) for short-term trading signals.
+
     Args:
-        symbol: Ticker to analyze.
-        period: Historical period string accepted by yfinance.
-        rsi_period: RSI window used by Connors RSI.
-        streak_period: Streak RSI window.
-        rank_period: Percent-rank lookback window.
-        zscore_window: Rolling window used for price z-score.
-        connors_weight: Weight applied to Connors RSI component.
-        zscore_weight: Weight applied to Z-Score component.
+        symbol: Ticker to analyze (e.g., 'AAPL', 'MSFT').
+        period: Historical period string accepted by yfinance (default: '1y').
+        rsi_period: RSI window used by Connors RSI (default: 3).
+        streak_period: Streak RSI window (default: 2).
+        rank_period: Percent-rank lookback window (default: 100).
+        zscore_window: Rolling window used for price z-score (default: 20).
+        connors_weight: Weight applied to Connors RSI component (default: 0.7).
+        zscore_weight: Weight applied to Z-Score component (default: 0.3).
+    
+    Returns:
+        Detailed performance report with signals, metrics, and recommendation.
     """
     params: Dict[str, object] = {
         "symbol": _normalize_symbol(symbol),
@@ -152,12 +191,18 @@ def dual_moving_average_analysis(
 ) -> str:
     """Execute the dual moving average crossover MCP strategy analysis.
 
+    This strategy uses Golden Cross (short MA crosses above long MA = BUY) 
+    and Death Cross (short MA crosses below long MA = SELL) signals.
+
     Args:
-        symbol: Ticker to analyze.
-        period: Historical period string accepted by yfinance.
-        short_period: Short moving-average length.
-        long_period: Long moving-average length.
-        ma_type: Moving-average type accepted by MCP tool (SMA/EMA).
+        symbol: Ticker to analyze (e.g., 'AAPL', 'MSFT').
+        period: Historical period string accepted by yfinance (default: '1y').
+        short_period: Short moving-average length in days (default: 50).
+        long_period: Long moving-average length in days (default: 200).
+        ma_type: Moving-average type: 'SMA' or 'EMA' (default: 'EMA').
+    
+    Returns:
+        Detailed performance report with signals, metrics, and recommendation.
     """
     params: Dict[str, object] = {
         "symbol": _normalize_symbol(symbol),
@@ -169,8 +214,10 @@ def dual_moving_average_analysis(
     return _call_finance_tool("analyze_dual_ma_strategy", params)
 
 
+# ---------------------------------------------------------------------------
+# STRATEGY_TOOLS: The 4 strategies used by Full Strategy Analysis
+# ---------------------------------------------------------------------------
 STRATEGY_TOOLS: List = [
-    bollinger_zscore_analysis,
     bollinger_fibonacci_analysis,
     macd_donchian_analysis,
     connors_zscore_analysis,
@@ -178,73 +225,79 @@ STRATEGY_TOOLS: List = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# Additional Tools (not part of the 4-strategy analysis)
+# ---------------------------------------------------------------------------
+
 @tool
 def comprehensive_performance_report(symbol: str, period: str = "1y") -> str:
     """Call the MCP tool that generates the multi-strategy performance markdown report.
 
+    This is a deterministic report that runs all 4 strategies and compiles results
+    into a structured format without AI interpretation.
+
     Args:
         symbol: Ticker to analyze.
-        period: Historical period string accepted by yfinance.
+        period: Historical period for analysis.
+    
+    Returns:
+        Complete markdown report with all strategy results and recommendations.
     """
-    params: Dict[str, object] = {"symbol": _normalize_symbol(symbol), "period": period}
+    params: Dict[str, object] = {
+        "symbol": _normalize_symbol(symbol),
+        "period": period,
+    }
     return _call_finance_tool("generate_comprehensive_analysis_report", params)
 
 
 @tool
 def unified_market_scanner(
-    symbols: List[str] | str,
-    ma_type: str = "SMA",
-    short_period: int = 50,
-    long_period: int = 200,
+    symbols: str,
+    period: str = "1y",
+    output_format: str = "detailed",
 ) -> str:
-    """Run the MCP unified market scanner across a basket of tickers.
+    """Invoke the MCP unified market scanner for a basket of tickers.
 
     Args:
-        symbols: List of tickers or comma-separated string.
-        ma_type: Moving-average type (SMA/EMA) for scanner.
-        short_period: Short MA length.
-        long_period: Long MA length.
+        symbols: Comma-separated ticker symbols (e.g., 'AAPL,MSFT,GOOGL').
+        period: Historical period for analysis (default: '1y').
+        output_format: Report format - 'detailed', 'summary', or 'executive'.
+    
+    Returns:
+        Multi-stock analysis report with rankings and recommendations.
     """
     params: Dict[str, object] = {
         "symbols": symbols,
-        "ma_type": ma_type,
-        "short_period": short_period,
-        "long_period": long_period,
+        "period": period,
+        "output_format": output_format,
     }
     return _call_finance_tool("market_scanner", params)
 
 
 @tool
 def fundamental_analysis_report(symbol: str, period: str = "3y") -> str:
-    """Call the MCP fundamental analysis report tool.
+    """Generate a fundamental analysis report using financial statements.
 
     Args:
-        symbol: Stock ticker to analyze (e.g., MSFT).
-        period: Historical span for statements (default 3y).
+        symbol: Ticker to analyze.
+        period: Historical period for financial data.
+    
+    Returns:
+        Fundamental analysis report with financial metrics and ratios.
     """
-
-    params: Dict[str, object] = {"symbol": _normalize_symbol(symbol), "period": period}
+    params: Dict[str, object] = {
+        "symbol": _normalize_symbol(symbol),
+        "period": period,
+    }
     return _call_finance_tool("generate_fundamental_analysis_report", params)
 
 
-ALL_TOOLS: List = STRATEGY_TOOLS + [comprehensive_performance_report, unified_market_scanner, fundamental_analysis_report]
-
-
-@tool
-def inspect_statement_indices(symbol: str) -> str:
-    """Inspect available financial statement rows from yfinance for troubleshooting.
-
-    Args:
-        symbol: Ticker to inspect (e.g., MSFT).
-    """
-
-    params: Dict[str, object] = {"symbol": _normalize_symbol(symbol)}
-    return _call_finance_tool("inspect_financial_statement_indices", params)
-
-
-ALL_TOOLS: List = STRATEGY_TOOLS + [
+# ---------------------------------------------------------------------------
+# ALL_TOOLS: Complete list including additional analysis tools
+# ---------------------------------------------------------------------------
+ALL_TOOLS: List = [
+    *STRATEGY_TOOLS,
     comprehensive_performance_report,
     unified_market_scanner,
     fundamental_analysis_report,
-    inspect_statement_indices,
 ]

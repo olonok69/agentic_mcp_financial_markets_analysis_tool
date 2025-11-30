@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 import time
-
 import os
 from typing import List, Optional
 
@@ -43,6 +42,7 @@ app.add_middleware(
 
 
 def _needs_fallback(report: str) -> bool:
+    """Check if agent output needs fallback to deterministic report."""
     if not report:
         return True
     content = report.strip().lower()
@@ -50,11 +50,22 @@ def _needs_fallback(report: str) -> bool:
         return True
     required_sections = [
         "strategy highlights",
-        "consensus outlook",
+        "consensus outlook", 
         "risk metrics",
         "final recommendation",
     ]
     return any(section not in content for section in required_sections)
+
+
+def _extract_recommendation(agent_output: str) -> str:
+    """Extract BUY/SELL/HOLD from agent output."""
+    output_upper = agent_output.strip().upper()
+    if "BUY" in output_upper:
+        return "BUY"
+    elif "SELL" in output_upper:
+        return "SELL"
+    else:
+        return "HOLD"
 
 
 class AnalyzeRequest(BaseModel):
@@ -78,9 +89,8 @@ class ScannerRequest(BaseModel):
         DEFAULT_SCANNER_SYMBOLS,
         description="List or comma-separated symbols",
     )
-    ma_type: str = Field("SMA", description="Moving average type (SMA/EMA)")
-    short_period: int = Field(50, description="Short MA period")
-    long_period: int = Field(200, description="Long MA period")
+    period: str = Field("1y", description="Historical period for analysis")
+    output_format: str = Field("detailed", description="Output format: detailed, summary, or executive")
 
 
 class FundamentalRequest(BaseModel):
@@ -95,8 +105,13 @@ async def healthcheck() -> dict:
 
 @app.post("/analyze", tags=["analysis"])
 async def analyze(request: AnalyzeRequest) -> dict:
-    """Run the multi-strategy analysis agent and return the markdown report."""
-
+    """
+    Run the multi-strategy analysis agent and return the markdown report.
+    
+    This endpoint uses an AI agent (smolagents) to execute trading strategy tools
+    and synthesize results. If the agent fails or produces incomplete output,
+    it automatically falls back to the deterministic comprehensive report.
+    """
     try:
         result = await run_in_threadpool(
             run_agent,
@@ -113,26 +128,47 @@ async def analyze(request: AnalyzeRequest) -> dict:
         )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"Analysis failed: {exc}") from exc
+    
+    # Check if agent output needs fallback
     if _needs_fallback(result):
+        # Extract any recommendation the agent did provide
+        agent_recommendation = _extract_recommendation(result)
+        
+        # Get the deterministic comprehensive report
         fallback_report = await run_in_threadpool(
             comprehensive_performance_report,
             request.symbol,
             request.period,
         )
-        result = (
-            "⚠️ **Agent summary was truncated or missing required sections.** "
-            "Automatically appending the deterministic comprehensive performance report below.\n\n"
-            f"## Agent Reply\n{result.strip() or '_Agent returned no explanation._'}\n\n"
-            "## Comprehensive Performance Report\n"
-            f"{fallback_report}"
-        )
+        
+        # Build a clean fallback response
+        result = f"""# {request.symbol.upper()} Technical Analysis Report
+
+---
+⚠️ **Notice: AI Agent Output Incomplete - Using Deterministic Report**
+
+> The AI agent attempted to analyze {request.symbol.upper()} but produced incomplete output.
+> The agent's recommendation was: **{agent_recommendation}**
+>
+> Below is the **Comprehensive Performance Report** generated using deterministic calculations.
+> This ensures you still receive complete, accurate analysis data.
+
+---
+
+{fallback_report}
+"""
+    
     return {"report": result}
 
 
 @app.post("/report", tags=["analysis"])
 async def comprehensive_report(request: ReportRequest) -> dict:
-    """Return the MCP comprehensive multi-strategy markdown report."""
-
+    """
+    Return the MCP comprehensive multi-strategy markdown report.
+    
+    This endpoint directly executes strategy tools with fixed parameters
+    and generates a structured report without AI interpretation.
+    """
     result = await run_in_threadpool(
         comprehensive_performance_report,
         request.symbol,
@@ -144,13 +180,11 @@ async def comprehensive_report(request: ReportRequest) -> dict:
 @app.post("/scanner", tags=["analysis"])
 async def scanner(request: ScannerRequest) -> dict:
     """Run the unified market scanner for the provided basket."""
-
     result = await run_in_threadpool(
         unified_market_scanner,
         request.symbols,
-        request.ma_type,
-        request.short_period,
-        request.long_period,
+        request.period,
+        request.output_format,
     )
     return {"report": result}
 
