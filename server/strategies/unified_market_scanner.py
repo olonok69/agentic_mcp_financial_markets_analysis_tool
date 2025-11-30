@@ -639,7 +639,7 @@ def generate_detailed_unified_report(results: List[Dict], failed_symbols: List[s
         price_emoji = "🟢" if result['price_change_1d'] > 0 else "🔴" if result['price_change_1d'] < 0 else "⚪"
         action_emoji = {"STRONG_BUY": "🟢", "BUY": "🔵", "HOLD": "⚪", "SELL": "🔴", "AVOID": "❌"}.get(result['recommendation']['action'], "⚪")
         
-        report += f"| {i} | {result['symbol']} | ${result['current_price']:.2f} | {price_emoji} {result['price_change_1d']:+.1f}% | {action_emoji} {result['recommendation']['action']} | {result['performance_summary']['best_strategy']} | {result['performance_summary']['best_excess_return']:+.1f}% | {result['risk_metrics']['risk_level']} |\n"
+        report += f"| {i} | {result['symbol']} | USD {result['current_price']:.2f} | {price_emoji} {result['price_change_1d']:+.1f}% | {action_emoji} {result['recommendation']['action']} | {result['performance_summary']['best_strategy']} | {result['performance_summary']['best_excess_return']:+.1f}% | {result['risk_metrics']['risk_level']} |\n"
     
     report += "\n---\n\n## 📈 Detailed Individual Analysis\n\n"
     
@@ -669,7 +669,7 @@ def generate_individual_stock_report(result: Dict) -> str:
     signals = result['current_signals']
     
     report = f"""
-### {stock} - ${result['current_price']:.2f} ({result['price_change_1d']:+.1f}%)
+### {stock} - USD {result['current_price']:.2f} ({result['price_change_1d']:+.1f}%)
 
 **🎯 Recommendation:** {rec['action']} | **📊 Confidence:** {rec['confidence']} | **💰 Position Size:** {rec['position_size']}
 
@@ -809,7 +809,7 @@ TOP 10 OPPORTUNITIES:
 """
     
     for i, result in enumerate(results[:10], 1):
-        summary += f"{i:2d}. {result['symbol']:6s} | ${result['current_price']:7.2f} | {result['recommendation']['action']:12s} | Best: {result['performance_summary']['best_strategy'][:15]:15s} | {result['performance_summary']['best_excess_return']:+5.1f}%\n"
+        summary += f"{i:2d}. {result['symbol']:6s} | USD {result['current_price']:7.2f} | {result['recommendation']['action']:12s} | Best: {result['performance_summary']['best_strategy'][:15]:15s} | {result['performance_summary']['best_excess_return']:+5.1f}%\n"
     
     return summary
 

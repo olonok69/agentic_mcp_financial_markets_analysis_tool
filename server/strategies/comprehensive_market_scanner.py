@@ -779,7 +779,7 @@ def generate_individual_stock_analysis(result: Dict) -> str:
     
     stock = result['symbol']
     analysis = f"""
-### {stock} - ${result['current_price']:.2f}
+### {stock} - USD {result['current_price']:.2f}
 
 **Buy & Hold Return ({result.get('period', '1y')}):** {result['buy_hold_return']:+.1f}%  
 **Best Strategy:** {result['best_strategy']} ({result['best_excess_return']:+.1f}% excess)  
@@ -835,7 +835,7 @@ STOCK RANKINGS BY BEST STRATEGY PERFORMANCE:
 """
     
     for i, result in enumerate(results, 1):
-        summary += f"{i:2d}. {result['symbol']:6s} | ${result['current_price']:7.2f} | B&H: {result['buy_hold_return']:+5.1f}% | Best: {result['best_strategy'][:15]:15s} | Excess: {result['best_excess_return']:+5.1f}% | {result['overall_recommendation']}\n"
+        summary += f"{i:2d}. {result['symbol']:6s} | USD {result['current_price']:7.2f} | B&H: {result['buy_hold_return']:+5.1f}% | Best: {result['best_strategy'][:15]:15s} | Excess: {result['best_excess_return']:+5.1f}% | {result['overall_recommendation']}\n"
     
     # Strategy effectiveness
     summary += f"\nSTRATEGY EFFECTIVENESS RANKING:\n"

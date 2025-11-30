@@ -787,7 +787,7 @@ This enhanced analysis combines five technical strategies with detailed performa
             best_excess = max([result['performance_metrics'].get(s, {}).get('excess_return', -999) 
                               for s in result['performance_metrics']])
             
-            report += f"| {i} | {result['symbol']} | ${result['current_price']:.2f} | {price_change_emoji} {result['price_change_1d']:+.1f}% | {result['overall_score']:.1f} | {result['overall_signal']} | {result['buy_hold_return']:+.1f}% | {best_excess:+.1f}% | {result['risk_level'].replace('_', ' ')} |\n"
+            report += f"| {i} | {result['symbol']} | USD {result['current_price']:.2f} | {price_change_emoji} {result['price_change_1d']:+.1f}% | {result['overall_score']:.1f} | {result['overall_signal']} | {result['buy_hold_return']:+.1f}% | {best_excess:+.1f}% | {result['risk_level'].replace('_', ' ')} |\n"
         
         # Detailed analysis for top picks
         if strong_buys:
@@ -851,7 +851,7 @@ def generate_detailed_stock_analysis(stock: Dict) -> str:
     """Generate detailed individual stock analysis"""
     
     analysis = f"""
-### {stock['symbol']} - ${stock['current_price']:.2f} ({stock['price_change_1d']:+.1f}%)
+### {stock['symbol']} - USD {stock['current_price']:.2f} ({stock['price_change_1d']:+.1f}%)
 
 **Overall Assessment:** {stock['overall_signal']} (Score: {stock['overall_score']:.1f})  
 **Buy & Hold Return ({stock.get('period', '1y')}):** {stock['buy_hold_return']:+.1f}%  
@@ -1084,7 +1084,7 @@ TOP 10 OPPORTUNITIES:
     for i, result in enumerate(results[:10], 1):
         best_excess = max([result['performance_metrics'].get(s, {}).get('excess_return', -999) 
                           for s in result['performance_metrics']])
-        summary += f"{i:2d}. {result['symbol']:6s} | ${result['current_price']:7.2f} | Score: {result['overall_score']:5.1f} | B&H: {result['buy_hold_return']:+5.1f}% | Best: {best_excess:+5.1f}% | {result['overall_signal']}\n"
+        summary += f"{i:2d}. {result['symbol']:6s} | USD {result['current_price']:7.2f} | Score: {result['overall_score']:5.1f} | B&H: {result['buy_hold_return']:+5.1f}% | Best: {best_excess:+5.1f}% | {result['overall_signal']}\n"
     
     if strong_buys:
         summary += f"\nSTRONG BUY RECOMMENDATIONS:\n"

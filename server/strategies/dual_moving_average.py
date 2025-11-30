@@ -208,7 +208,7 @@ def register_dual_ma_tools(mcp):
             if not recent_signals.empty:
                 recent_signals_str = "\nRecent Signals:\n"
                 for date, row in recent_signals.iterrows():
-                    recent_signals_str += f"• {date.strftime('%Y-%m-%d')}: {row['Cross_Type'].replace('_', ' ')} - {row['Signal']} at ${row['Close']:.2f}\n"
+                    recent_signals_str += f"• {date.strftime('%Y-%m-%d')}: {row['Cross_Type'].replace('_', ' ')} - {row['Signal']} at USD {row['Close']:.2f}\n"
 
             # Trend analysis
             trend_status = "BULLISH 🟢" if current_short_ma > current_long_ma else "BEARISH 🔴"
@@ -225,9 +225,9 @@ STRATEGY PARAMETERS:
 • Analysis Period: {period}
 
 CURRENT STATUS:
-• Current Price: ${current_price:.2f}
-• {short_period}-day {ma_type}: ${current_short_ma:.2f}
-• {long_period}-day {ma_type}: ${current_long_ma:.2f}
+• Current Price: USD {current_price:.2f}
+• {short_period}-day {ma_type}: USD {current_short_ma:.2f}
+• {long_period}-day {ma_type}: USD {current_long_ma:.2f}
 • Current Position: {'LONG' if current_position > 0 else 'SHORT' if current_position < 0 else 'NEUTRAL'}
 • Trend: {trend_status}
 • Trend Strength: {trend_strength:.2f}%
@@ -372,9 +372,9 @@ SCORE BREAKDOWN:
 • Trend Momentum (30%): {momentum_score:.1f}
 
 CURRENT READINGS:
-• {short_period}-day {ma_type}: ${current_short_ma:.2f}
-• {long_period}-day {ma_type}: ${current_long_ma:.2f}
-• Current Price: ${current_price:.2f}
+• {short_period}-day {ma_type}: USD {current_short_ma:.2f}
+• {long_period}-day {ma_type}: USD {current_long_ma:.2f}
+• Current Price: USD {current_price:.2f}
 • Price vs Short MA: {((current_price - current_short_ma) / current_short_ma * 100):+.2f}%
 • Price vs Long MA: {((current_price - current_long_ma) / current_long_ma * 100):+.2f}%
 
@@ -640,7 +640,7 @@ TOP OPPORTUNITIES:
 
             message += f"""
 {i}. {opp['symbol']} {direction_emoji} (Score: {opp['score']:.1f})
-   • Price: ${opp['price']:.2f}
+   • Price: USD {opp['price']:.2f}
    • Position: {position_text}
    • Trend: {opp['trend_direction']} ({opp['trend_strength']:.1f}% strength)
    • Signal: {opp['signal_info']}

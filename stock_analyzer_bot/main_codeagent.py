@@ -1,42 +1,29 @@
 """
-CodeAgent implementation using LOW-LEVEL MCP tools with Python orchestration.
+CodeAgent implementation using LOW-LEVEL granular MCP tools.
 
 #####################################################################
 # CODEAGENT APPROACH
 #####################################################################
 #
-# This agent uses LOW-LEVEL granular tools and writes Python code
-# to orchestrate them. The LLM generates loops, variables, and logic.
+# This agent uses LOW-LEVEL tools and writes Python code to orchestrate them.
+# The LLM generates executable code that loops, combines, and analyzes.
 #
 # TOOLS USED:
 #   - bollinger_fibonacci_analysis: Single strategy, single stock
 #   - macd_donchian_analysis: Single strategy, single stock
 #   - connors_zscore_analysis: Single strategy, single stock
 #   - dual_moving_average_analysis: Single strategy, single stock
-#   - fundamental_analysis_report: For combined analysis
+#   - fundamental_analysis_report: Financial data extraction
 #
 # ADVANTAGES:
-#   - Flexible: LLM can write custom logic
-#   - Composable: Combine tools in any way
+#   - Flexible: LLM can customize analysis logic
+#   - Efficient loops: One code block handles N stocks
 #   - Transparent: See exactly what code runs
 #
 # COMPARISON WITH ToolCallingAgent:
-#   - ToolCallingAgent: "unified_market_scanner(AAPL,MSFT,GOOGL)" → 1 call
-#   - CodeAgent: for stock in stocks: for strategy in strategies: ... → custom code
-#
-# CODE EXAMPLE (what the LLM generates):
-#   ```python
-#   results = {}
-#   for stock in ["AAPL", "MSFT", "GOOGL"]:
-#       results[stock] = {
-#           "bb_fib": bollinger_fibonacci_analysis(symbol=stock),
-#           "macd": macd_donchian_analysis(symbol=stock),
-#           "connors": connors_zscore_analysis(symbol=stock),
-#           "dual_ma": dual_moving_average_analysis(symbol=stock),
-#       }
-#   # Custom analysis logic here
-#   final_answer(report)
-#   ```
+#   - ToolCallingAgent: "Give me everything for AAPL" → 1 call
+#   - CodeAgent: "Let me call 4 tools and combine results" → 4+ calls
+#     BUT for multi-stock: CodeAgent writes efficient loops
 #
 #####################################################################
 """
@@ -61,8 +48,8 @@ load_dotenv()
 # Default configuration
 DEFAULT_MODEL_ID = os.getenv("SMOLAGENT_MODEL_ID", "gpt-4o")
 DEFAULT_MODEL_PROVIDER = os.getenv("SMOLAGENT_MODEL_PROVIDER", "litellm")
-DEFAULT_MAX_STEPS = int(os.getenv("SMOLAGENT_MAX_STEPS", "20"))
-DEFAULT_EXECUTOR = os.getenv("SMOLAGENT_EXECUTOR", "local")
+DEFAULT_MAX_STEPS = int(os.getenv("SMOLAGENT_MAX_STEPS", "20"))  # CodeAgent needs more steps
+DEFAULT_EXECUTOR = os.getenv("SMOLAGENT_EXECUTOR", "local")  # local, e2b, docker
 
 __all__ = [
     "DEFAULT_MODEL_ID",
@@ -167,47 +154,38 @@ hold_count = 0
 # Parse each result and extract data
 # Look for patterns like "Signal: BUY", "Return: +5.2%", etc.
 
-# Build detailed report with ACTUAL DATA from results
-# Use markdown tables that render properly
-
+# Build report with actual data
 report = f'''
-{symbol} Technical Analysis Report
+{symbol} Technical Analysis
 Period: {period}
 
-Strategy Performance Comparison
+Strategy Results Summary
 
-| Strategy | Signal | Score | Strategy Return | vs Buy&Hold | Win Rate |
-|----------|--------|-------|-----------------|-------------|----------|
-| Bollinger-Fib | [extract] | [extract] | [extract]% | [extract]% | [extract]% |
-| MACD-Donchian | [extract] | [extract] | [extract]% | [extract]% | [extract]% |
-| Connors-ZScore | [extract] | [extract] | [extract]% | [extract]% | [extract]% |
-| Dual MA | [extract] | [extract] | [extract]% | [extract]% | [extract]% |
+| Strategy | Signal | Return | Score | Key Metric |
+|----------|--------|--------|-------|------------|
+| Bollinger-Fibonacci | [signal from bb_result] | [%] | [score] | [level/band] |
+| MACD-Donchian | [signal from macd_result] | [%] | [score] | [MACD value] |
+| Connors RSI + Z-Score | [signal from connors_result] | [%] | [score] | [RSI/ZScore] |
+| Dual Moving Average | [signal from dual_ma_result] | [%] | [score] | [trend] |
 
-Signal Consensus: X/4 BUY, Y/4 SELL, Z/4 HOLD
+Signal Consensus: X BUY, Y SELL, Z HOLD
 
-Detailed Strategy Analysis
+Detailed Analysis
 
-1. Bollinger Bands + Fibonacci
-[Include actual metrics from bb_result: current %B, band position, fib levels, etc.]
+Bollinger Bands & Fibonacci:
+[Extract key details from bb_result]
 
-2. MACD + Donchian Channel  
-[Include actual metrics from macd_result: MACD value, signal line, channel position, etc.]
+MACD-Donchian:
+[Extract key details from macd_result]
 
-3. Connors RSI + Z-Score
-[Include actual metrics from connors_result: RSI value, z-score, percentile, etc.]
+Connors RSI + Z-Score:
+[Extract key details from connors_result]
 
-4. Dual Moving Average (50/200 EMA)
-[Include actual metrics from dual_ma_result: MA values, crossover status, trend direction, etc.]
+Dual Moving Average:
+[Extract key details from dual_ma_result]
 
-Risk Assessment
-- Volatility: [from results]
-- Max Drawdown: [from results]  
-- Sharpe Ratio: [from results]
-
-Recommendation
-Action: [BUY/HOLD/SELL based on consensus]
-Confidence: [based on signal agreement]
-Reasoning: [specific reasons citing the data above]
+Overall Recommendation
+[Based on signal consensus and metrics, provide recommendation]
 '''
 
 final_answer(report)
@@ -223,6 +201,9 @@ CRITICAL REQUIREMENTS:
 Write complete code that parses the tool outputs and builds a data-rich report.
 """
 
+# NOTE: In MARKET_SCANNER_PROMPT, all occurrences of {stock} must be escaped as {{stock}}
+# because this string uses .format() for symbols, symbol_list, and period.
+# Single braces like {stock} would cause KeyError during formatting.
 MARKET_SCANNER_PROMPT = """Scan and compare these stocks: {symbols}
 
 TOOLS TO CALL (for each stock):
@@ -259,10 +240,10 @@ for stock, results in all_data.items():
     # Count buy/sell/hold signals
     # Calculate average score or opportunity metric
     stock_summaries[stock] = {{
-        "signals": [extracted_signals],
-        "buy_count": X,
-        "avg_return": Y,
-        "score": Z,
+        "signals": [],
+        "buy_count": 0,
+        "avg_return": 0,
+        "score": 0,
     }}
 
 # Rank stocks by opportunity (buy signals, returns, etc.)
@@ -290,7 +271,7 @@ Individual Stock Analysis
 for stock in stocks:
     results = all_data[stock]
     report += f'''
-{stock}:
+{{stock}}:
 
 | Strategy | Signal | Return | Key Metric |
 |----------|--------|--------|------------|
@@ -453,11 +434,13 @@ REQUIREMENTS:
 4. Rank and recommend based on real metrics
 """
 
+# NOTE: In COMBINED_ANALYSIS_PROMPT, variables like {symbol}, {tech_period}, {fund_period}
+# inside the code example must be escaped as {{symbol}}, {{tech_period}}, {{fund_period}}
+# because this string uses .format() for technical_period and fundamental_period.
 COMBINED_ANALYSIS_PROMPT = """Perform complete Technical + Fundamental analysis of {symbol}.
 
 TOOLS TO CALL:
-
-Technical (all 4):
+Technical (all 4 strategies):
 1. bollinger_fibonacci_analysis(symbol="{symbol}", period="{technical_period}")
 2. macd_donchian_analysis(symbol="{symbol}", period="{technical_period}")
 3. connors_zscore_analysis(symbol="{symbol}", period="{technical_period}")
@@ -472,58 +455,62 @@ import json
 import re
 
 symbol = "{symbol}"
+tech_period = "{technical_period}"
+fund_period = "{fundamental_period}"
 
-# Get all technical analysis
-bb_result = bollinger_fibonacci_analysis(symbol=symbol, period="{technical_period}")
-macd_result = macd_donchian_analysis(symbol=symbol, period="{technical_period}")
-connors_result = connors_zscore_analysis(symbol=symbol, period="{technical_period}")
-dual_ma_result = dual_moving_average_analysis(symbol=symbol, period="{technical_period}")
+# Get technical analysis from all 4 strategies
+bb_result = bollinger_fibonacci_analysis(symbol=symbol, period=tech_period)
+macd_result = macd_donchian_analysis(symbol=symbol, period=tech_period)
+connors_result = connors_zscore_analysis(symbol=symbol, period=tech_period)
+dual_ma_result = dual_moving_average_analysis(symbol=symbol, period=tech_period)
 
 # Get fundamental analysis
-fund_result = fundamental_analysis_report(symbol=symbol, period="{fundamental_period}")
+fund_result = fundamental_analysis_report(symbol=symbol, period=fund_period)
 
-# Parse technical results to extract signals and metrics
-# Count buy/sell/hold signals for consensus
+# Parse all results and extract key metrics
+# Technical: signals, returns, scores
+# Fundamental: revenue, margins, growth, ratios
 
-# Build comprehensive report
+# Build combined report
 report = f'''
-{{symbol}} Combined Analysis Report
-Technical Period: {technical_period} | Fundamental Period: {fundamental_period}
+{{symbol}} Combined Analysis
+Technical Period: {{tech_period}} | Fundamental Period: {{fund_period}}
 
-Technical Analysis Summary
+TECHNICAL ANALYSIS
 
-| Strategy | Signal | Return vs B&H | Key Metric |
-|----------|--------|---------------|------------|
-| Bollinger-Fibonacci | [extract] | [extract]% | [score] |
-| MACD-Donchian | [extract] | [extract]% | [MACD val] |
-| Connors-ZScore | [extract] | [extract]% | [RSI/Z] |
-| Dual Moving Avg | [extract] | [extract]% | [trend] |
+Strategy Summary
 
-Technical Consensus: X/4 bullish signals
+| Strategy | Signal | Return | Score |
+|----------|--------|--------|-------|
+| Bollinger-Fibonacci | [from bb_result] | [%] | [score] |
+| MACD-Donchian | [from macd_result] | [%] | [score] |
+| Connors RSI + Z-Score | [from connors_result] | [%] | [score] |
+| Dual Moving Average | [from dual_ma_result] | [%] | [score] |
 
-Fundamental Analysis Summary
+Technical Consensus: [X BUY / Y SELL / Z HOLD]
+Technical Outlook: [BULLISH/BEARISH/NEUTRAL based on signals]
+
+FUNDAMENTAL ANALYSIS
 
 {{fund_result}}
 
-Alignment Analysis
+Key Financial Metrics:
+[Extract and highlight the most important metrics]
 
-Technical View: [bullish/bearish/neutral based on signals]
-Fundamental View: [bullish/bearish/neutral based on metrics]
-Alignment: [ALIGNED / DIVERGENT]
+ALIGNMENT ANALYSIS
 
-If divergent, explain: [technicals say X but fundamentals say Y because...]
+Technical View: [Summary]
+Fundamental View: [Summary]
+Agreement: [YES/NO/PARTIAL] - [Explanation]
 
-Final Recommendation
+INVESTMENT THESIS
 
-| Aspect | Assessment |
-|--------|------------|
-| Action | [BUY / HOLD / SELL] |
-| Confidence | [HIGH / MEDIUM / LOW] |
-| Time Horizon | [short/medium/long term] |
-| Key Catalyst | [what would confirm or invalidate] |
+[Synthesize both analyses into clear recommendation]
+- Entry strategy: [if bullish]
+- Risk factors: [from both analyses]
+- Conviction level: [HIGH/MEDIUM/LOW]
 
-Reasoning:
-[2-3 sentences synthesizing both technical and fundamental views with specific data references]
+Final Recommendation: [BUY/HOLD/SELL] with [X]% confidence
 '''
 
 final_answer(report)

@@ -41,7 +41,7 @@ def add_comprehensive_strategy_analysis_tool(mcp):
             # Initialize report
             report = f"""# {symbol.upper()} Comprehensive Technical Analysis
 *Analysis Date: {analysis_date}*  
-*Current Price: ${current_price:.2f}*
+*Current Price: USD {current_price:.2f}*
 
 ## Executive Summary
 
@@ -128,9 +128,9 @@ This comprehensive technical analysis evaluates {symbol.upper()} stock using fiv
 **Market Condition:** {condition}
 
 **Key Metrics:**
-- Rolling Mean (20-day): ${latest_mean:.2f}
-- Upper Bollinger Band: ${latest_upper:.2f}
-- Lower Bollinger Band: ${latest_lower:.2f}
+- Rolling Mean (20-day): USD {latest_mean:.2f}
+- Upper Bollinger Band: USD {latest_upper:.2f}
+- Lower Bollinger Band: USD {latest_lower:.2f}
 - Distance from Upper Band: {((latest_close - latest_upper) / latest_upper * 100):+.2f}%
 - Distance from Lower Band: {((latest_close - latest_lower) / latest_lower * 100):+.2f}%
 
@@ -302,9 +302,9 @@ This comprehensive technical analysis evaluates {symbol.upper()} stock using fiv
 **Signal:** {signal}  
 
 **Key Metrics:**
-- 50-day EMA: ${current_short_ema:.2f}
-- 200-day EMA: ${current_long_ema:.2f}
-- Current Price: ${current_price:.2f}
+- 50-day EMA: USD {current_short_ema:.2f}
+- 200-day EMA: USD {current_long_ema:.2f}
+- Current Price: USD {current_price:.2f}
 - Price vs Short MA: {((current_price - current_short_ema) / current_short_ema * 100):+.2f}%
 - Price vs Long MA: {((current_price - current_long_ema) / current_long_ema * 100):+.2f}%
 - MA Separation: {ma_separation:.2f}%

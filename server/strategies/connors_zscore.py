@@ -119,8 +119,8 @@ Market Condition: {market_condition}
         
         message = f"""
 Symbol: {symbol}, Period: {period}, Window: {window}
-Current Price: ${current_price:.2f}
-Rolling Mean: ${current_mean:.2f}
+Current Price: USD {current_price:.2f}
+Rolling Mean: USD {current_mean:.2f}
 Current Z-Score: {current_zscore:.2f}
 Z-Score Indicator Score: {current_score:.2f}
 
@@ -202,7 +202,7 @@ Standard Deviations from Mean: {abs(current_zscore):.2f}
         
         message = f"""
 Symbol: {symbol}, Period: {period}
-Current Price: ${current_price:.2f}
+Current Price: USD {current_price:.2f}
 
 === CONNORS RSI ANALYSIS ===
 Connors RSI: {current_crsi:.2f}

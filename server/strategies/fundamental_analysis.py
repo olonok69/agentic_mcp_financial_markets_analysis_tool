@@ -327,68 +327,34 @@ ROW_ALIASES: Dict[str, List[str]] = {
         "capitalExpenditures",
         "Capital Expenditures",
         "Capex",
-        "CAPEX",
         "PurchaseOfPPE",
         "Purchase Of PPE",
     ],
-    "Free Cash Flow": [
-        "FreeCashFlow",
-        "freeCashFlow",
-        "Free Cash Flow",
+    "Dividends Paid": [
+        "CashDividendsPaid",
+        "cashDividendsPaid",
+        "Cash Dividends Paid",
+        "DividendsPaid",
+        "dividendsPaid",
+        "Dividends Paid",
+        "CommonStockDividendPaid",
+        "Common Stock Dividend Paid",
+        "PaymentOfDividends",
+    ],
+    "Stock Repurchases": [
+        "RepurchaseOfCapitalStock",
+        "repurchaseOfCapitalStock",
+        "Repurchase Of Capital Stock",
+        "CommonStockRepurchased",
+        "Common Stock Repurchased",
     ],
     "Depreciation And Amortization": [
         "DepreciationAndAmortization",
         "depreciationAndAmortization",
         "Depreciation And Amortization",
-        "DepreciationAmortizationDepletion",
         "Depreciation",
         "depreciation",
-    ],
-    "Stock Based Compensation": [
-        "StockBasedCompensation",
-        "stockBasedCompensation",
-        "Stock Based Compensation",
-    ],
-    "Dividends Paid": [
-        "DividendsPaid",
-        "dividendsPaid",
-        "Dividends Paid",
-        "CashDividendsPaid",
-        "Cash Dividends Paid",
-        "CommonStockDividendPaid",
-    ],
-    "Repurchase Of Capital Stock": [
-        "RepurchaseOfCapitalStock",
-        "repurchaseOfCapitalStock",
-        "Repurchase Of Capital Stock",
-        "Stock Repurchase",
-        "StockRepurchase",
-        "CommonStockIssuance",
-    ],
-    "Change In Working Capital": [
-        "ChangeInWorkingCapital",
-        "changeInWorkingCapital",
-        "Change In Working Capital",
-        "ChangesInWorkingCapital",
-    ],
-    "Net Change In Cash": [
-        "NetChangeInCash",
-        "netChangeInCash",
-        "Net Change In Cash",
-        "ChangeInCash",
-        "Change In Cash",
-        "ChangeInCashSupplementalAsReported",
-    ],
-    "Beginning Cash Position": [
-        "BeginningCashPosition",
-        "beginningCashPosition",
-        "Beginning Cash Position",
-    ],
-    "End Cash Position": [
-        "EndCashPosition",
-        "endCashPosition",
-        "End Cash Position",
-        "EndingCashPosition",
+        "DepreciationAmortizationDepletion",
     ],
 }
 
@@ -397,85 +363,60 @@ ROW_ALIASES: Dict[str, List[str]] = {
 # HELPER FUNCTIONS
 # =============================================================================
 
-def _normalize_key(value: str) -> str:
-    """Normalize a key for comparison by removing non-alphanumeric chars and lowercasing."""
-    return re.sub(r"[^a-z0-9]", "", value.lower())
+def _normalize_key(s: str) -> str:
+    """Normalize a string key by lowercasing and removing non-alphanumeric characters."""
+    return re.sub(r"[^a-z0-9]", "", s.lower())
 
 
-def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalize DataFrame columns to handle MultiIndex and ensure string types."""
-    if df is None or df.empty:
-        return pd.DataFrame()
-    frame = df.copy()
-    if isinstance(frame.columns, pd.MultiIndex):
-        frame.columns = frame.columns.get_level_values(0)
-    frame.index = frame.index.map(str)
-    frame.columns = frame.columns.map(str)
-    return frame
-
-
-def _maybe_sort_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Sort DataFrame columns in descending order (newest first)."""
-    if df.empty:
-        return df
-    try:
-        # Try to parse columns as dates and sort
-        col_dates = pd.to_datetime(df.columns, errors="coerce")
-        if col_dates.notna().all():
-            sorted_cols = df.columns[col_dates.argsort()[::-1]]
-            return df.loc[:, sorted_cols]
-        # Fallback to string sorting
-        parsed = sorted(df.columns, reverse=True)
-        return df.loc[:, parsed]
-    except Exception:
-        return df
-
-
-def _prepare_statement(df: Optional[pd.DataFrame]) -> pd.DataFrame:
-    """Clean and prepare a financial statement DataFrame for analysis."""
-    if df is None:
-        logger.debug("Statement DataFrame is None; returning empty frame")
-        return pd.DataFrame()
-    if df.empty:
-        logger.debug("Statement DataFrame is empty; returning empty frame")
-        return pd.DataFrame()
-    try:
-        cleaned = _normalize_columns(df).copy()
-        cleaned = cleaned.apply(pd.to_numeric, errors="coerce")
-        cleaned = cleaned.where(pd.notnull(cleaned))
-        cleaned = _maybe_sort_columns(cleaned)
-        logger.debug("Prepared statement with shape %s", cleaned.shape)
-        return cleaned
-    except Exception:
-        logger.exception("Failed to clean financial statement DataFrame")
-        return pd.DataFrame()
-
-
-def _latest_pair(df: pd.DataFrame, row: str) -> Tuple[Optional[float], Optional[float]]:
+def _prepare_statement(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Extract the latest and previous values for a given row from the DataFrame.
+    Prepare a financial statement DataFrame for analysis.
+    
+    Ensures columns are datetime-sorted (most recent first) and handles
+    potential duplicate columns or index issues.
+    """
+    if df.empty:
+        return df
+    
+    # Ensure column names are datetime
+    try:
+        df.columns = pd.to_datetime(df.columns)
+        df = df.sort_index(axis=1, ascending=False)
+    except Exception:
+        pass
+    
+    return df
 
-    Uses ROW_ALIASES to find the row, trying exact matches first, then normalized
-    matches, and finally fuzzy substring matches.
 
+def _latest_pair(
+    df: pd.DataFrame,
+    row: str,
+) -> Tuple[Optional[float], Optional[float]]:
+    """
+    Extract the latest and previous year's values for a given row.
+    
+    Uses ROW_ALIASES to handle different naming conventions and includes
+    fuzzy matching as a fallback.
+    
     Args:
-        df: The prepared financial statement DataFrame
-        row: The row name to look for (should be a key in ROW_ALIASES)
-
+        df: Financial statement DataFrame
+        row: Canonical row name (key in ROW_ALIASES)
+    
     Returns:
-        Tuple of (latest_value, previous_value), with None for missing values
+        Tuple of (latest_value, previous_value), either can be None if not found
     """
     if df.empty:
-        logger.warning("Requested row '%s' but DataFrame is empty", row)
         return None, None
 
-    # Build normalized index map
-    normalized_map = {_normalize_key(idx): idx for idx in df.index}
-    candidates = [row] + ROW_ALIASES.get(row, [])
+    candidates = ROW_ALIASES.get(row, [row])
     normalized_candidates = [_normalize_key(c) for c in candidates]
 
+    # Build normalized index map
+    normalized_map: Dict[str, str] = {}
+    for idx_label in df.index:
+        normalized_map[_normalize_key(str(idx_label))] = idx_label
+
     def _extract_series(label: str, match_key: str) -> Tuple[Optional[float], Optional[float]]:
-        """Extract latest and previous values from a matched row."""
         try:
             series = pd.to_numeric(df.loc[label], errors="coerce").dropna()
             if series.empty:
@@ -522,15 +463,20 @@ def _get_value(df: pd.DataFrame, row: str, column_idx: int = 0) -> Optional[floa
 
 
 def _format_currency(value: Optional[float]) -> str:
-    """Format a numeric value as currency with appropriate suffix (T/B/M/K)."""
+    """
+    Format a numeric value as currency with appropriate suffix (T/B/M/K).
+    
+    NOTE: Uses USD prefix instead of $ symbol to avoid LaTeX interpretation
+    issues in markdown/Streamlit rendering where $...$ triggers math mode.
+    """
     if value is None or (isinstance(value, float) and np.isnan(value)):
         return "N/A"
     abs_val = abs(value)
     sign = "-" if value < 0 else ""
     for threshold, suffix in [(1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K")]:
         if abs_val >= threshold:
-            return f"{sign}${abs_val / threshold:.2f}{suffix}"
-    return f"{sign}${abs_val:,.0f}"
+            return f"{sign}USD {abs_val / threshold:.2f}{suffix}"
+    return f"{sign}USD {abs_val:,.0f}"
 
 
 def _format_percent(value: Optional[float]) -> str:
@@ -586,55 +532,35 @@ def _fetch_company_profile(symbol: str) -> Dict[str, Any]:
 
     Tries:
     1. yfinance Ticker.info property
-    2. Direct Yahoo Finance API call
-
-    Args:
-        symbol: Stock ticker symbol
-
-    Returns:
-        Dictionary with company profile data
+    2. Yahoo Finance API direct call
     """
     profile: Dict[str, Any] = {}
 
-    # Method 1: Try yfinance Ticker.info
+    # Method 1: yfinance Ticker.info
     try:
         ticker = yf.Ticker(symbol)
-        info = ticker.info or {}
-        if info:
-            profile = {
-                "longName": info.get("longName") or info.get("shortName") or symbol.upper(),
-                "sector": info.get("sector"),
-                "industry": info.get("industry"),
-                "longBusinessSummary": info.get("longBusinessSummary"),
-                "website": info.get("website"),
-                "country": info.get("country"),
-                "fullTimeEmployees": info.get("fullTimeEmployees"),
-                "marketCap": info.get("marketCap"),
-                "trailingPE": info.get("trailingPE"),
-                "forwardPE": info.get("forwardPE"),
-                "dividendYield": info.get("dividendYield"),
-                "beta": info.get("beta"),
-                "fiftyTwoWeekHigh": info.get("fiftyTwoWeekHigh"),
-                "fiftyTwoWeekLow": info.get("fiftyTwoWeekLow"),
-                "averageVolume": info.get("averageVolume"),
-            }
-            if profile.get("longName"):
-                logger.info("Fetched company profile via yfinance.info for %s", symbol)
-                return profile
+        info = ticker.info
+        if info and isinstance(info, dict) and info.get("longName"):
+            return info
     except Exception as e:
-        logger.debug("yfinance.info failed for %s: %s", symbol, e)
+        logger.debug("yfinance info failed for %s: %s", symbol, e)
 
-    # Method 2: Try direct Yahoo Finance API
+    # Method 2: Direct Yahoo Finance API
     try:
         url = f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}"
-        params = {"modules": "price,assetProfile,summaryDetail"}
-        resp = requests.get(url, params=params, timeout=15)
-        resp.raise_for_status()
-        payload = resp.json()
-        result = (payload.get("quoteSummary", {}).get("result") or [{}])[0]
-        price = result.get("price", {})
-        asset_profile = result.get("assetProfile", {})
-        summary_detail = result.get("summaryDetail", {})
+        params = {"modules": "assetProfile,price,summaryDetail"}
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(url, params=params, headers=headers, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+
+        result = data.get("quoteSummary", {}).get("result", [])
+        if not result:
+            raise ValueError("No data returned from Yahoo Finance API")
+
+        asset_profile = result[0].get("assetProfile", {})
+        price = result[0].get("price", {})
+        summary_detail = result[0].get("summaryDetail", {})
 
         profile = {
             "longName": price.get("longName") or price.get("shortName") or symbol.upper(),

@@ -548,7 +548,7 @@ def add_dual_ma_performance_tool(mcp):
             for date, row in signal_dates.iterrows():
                 signal_type = "Golden Cross - BUY" if row['Signal'] == 'BUY' else "Death Cross - SELL"
                 price = closes.loc[date]
-                recent_signals.append(f"• {date.strftime('%Y-%m-%d')}: {signal_type} at ${price:.2f}")
+                recent_signals.append(f"• {date.strftime('%Y-%m-%d')}: {signal_type} at USD {price:.2f}")
             
             # Current position
             current_short = short_ma.iloc[-1]
@@ -580,9 +580,9 @@ STRATEGY PARAMETERS:
 • Analysis Period: {period}
 
 CURRENT STATUS:
-• Current Price: ${current_price:.2f}
-• {short_period}-day {ma_type.upper()}: ${current_short:.2f}
-• {long_period}-day {ma_type.upper()}: ${current_long:.2f}
+• Current Price: USD {current_price:.2f}
+• {short_period}-day {ma_type.upper()}: USD {current_short:.2f}
+• {long_period}-day {ma_type.upper()}: USD {current_long:.2f}
 • Current Position: {current_position}
 • Current Signal: {current_signal}
 • Trend: {trend}
@@ -653,7 +653,7 @@ def add_comprehensive_analysis_tool(mcp):
 
         analysis_date = datetime.now().strftime("%B %d, %Y")
         current_price = (
-            f"${current_price_value:.2f}"
+            f"USD {current_price_value:.2f}"
             if isinstance(current_price_value, (int, float, np.floating))
             else "N/A"
         )

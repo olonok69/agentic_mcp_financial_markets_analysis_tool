@@ -99,10 +99,10 @@ def register_bollinger_zscore_tools(mcp):
 Symbol: {symbol}, Period: {period} days
 
 === BOLLINGER Z-SCORE ANALYSIS ===
-Latest Close Price: ${latest_close:.2f}
-Rolling Mean ({period}-day): ${latest_mean:.2f}
-Upper Bollinger Band: ${latest_upper_band:.2f}
-Lower Bollinger Band: ${latest_lower_band:.2f}
+Latest Close Price: USD {latest_close:.2f}
+Rolling Mean ({period}-day): USD {latest_mean:.2f}
+Upper Bollinger Band: USD {latest_upper_band:.2f}
+Lower Bollinger Band: USD {latest_lower_band:.2f}
 
 === Z-SCORE METRICS ===
 Latest Bollinger Z-Score: {latest_z_score:.2f}
