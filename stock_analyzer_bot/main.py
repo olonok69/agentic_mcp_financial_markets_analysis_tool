@@ -40,7 +40,7 @@ else:
 load_dotenv()
 
 # Defaults - prefer OpenAI for reliability
-DEFAULT_MODEL_ID = os.getenv("SMOLAGENT_MODEL_ID", "gpt-4o-mini")
+DEFAULT_MODEL_ID = os.getenv("SMOLAGENT_MODEL_ID", "gpt-4.1")
 DEFAULT_MODEL_PROVIDER = os.getenv("SMOLAGENT_MODEL_PROVIDER", "litellm")
 DEFAULT_MAX_STEPS = int(os.getenv("SMOLAGENT_MAX_STEPS", "25"))
 
