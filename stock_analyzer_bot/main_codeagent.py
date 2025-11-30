@@ -21,8 +21,10 @@ All analysis outputs must be well-documented with:
 from __future__ import annotations
 
 import argparse
+import json
 import os
-from typing import Dict, Literal, Optional
+import re
+from typing import Any, Dict, Literal, Optional, Union
 
 from smolagents import CodeAgent, InferenceClientModel, LiteLLMModel
 
@@ -54,6 +56,98 @@ DEFAULT_MODEL_ID = os.getenv("SMOLAGENT_MODEL_ID", "gpt-4o")
 DEFAULT_MODEL_PROVIDER = os.getenv("SMOLAGENT_MODEL_PROVIDER", "litellm")
 DEFAULT_MAX_STEPS = int(os.getenv("SMOLAGENT_MAX_STEPS", "20"))
 DEFAULT_EXECUTOR = os.getenv("SMOLAGENT_EXECUTOR", "local")
+DEFAULT_TEMPERATURE = float(os.getenv("SMOLAGENT_TEMPERATURE", "0.1"))
+DEFAULT_MAX_TOKENS = int(os.getenv("SMOLAGENT_MAX_TOKENS", "8192"))
+
+
+# ===========================================================================
+# Agent Result Formatting Helper
+# ===========================================================================
+
+def format_agent_result(result: Any) -> str:
+    """
+    Format the result from agent.run() into a clean string.
+    
+    The smolagents agent.run() can return different formats:
+    - A string directly
+    - A dict with an "answer" key
+    - A dict serialized as a string
+    - Content with literal '\\n' that need to be converted to newlines
+    - String starting with {"answer": prefix
+    
+    This function normalizes all these cases into a properly formatted string.
+    
+    Args:
+        result: The raw result from agent.run()
+        
+    Returns:
+        A clean, formatted string with proper newlines
+    """
+    if result is None:
+        return "No report generated"
+    
+    # Convert to string first for unified processing
+    if isinstance(result, dict):
+        # Check for common keys that contain the actual answer
+        for key in ["answer", "output", "result", "report", "content"]:
+            if key in result:
+                text = str(result[key])
+                break
+        else:
+            try:
+                text = json.dumps(result, indent=2)
+            except (TypeError, ValueError):
+                text = str(result)
+    else:
+        text = str(result)
+    
+    # Handle JSON string wrapper - check multiple patterns
+    # Pattern 1: {"answer":"content"} or {"answer": "content"}
+    # Pattern 2: String starting with {"answer":
+    
+    # Try to extract content from JSON wrapper
+    json_patterns = [
+        r'^\s*\{\s*"answer"\s*:\s*"(.*)"\s*\}\s*$',  # Full JSON object
+        r'^\s*\{\s*"answer"\s*:\s*"(.*)',  # Partial JSON (truncated end)
+        r'^\s*\{"answer":"(.*)',  # Compact JSON start
+    ]
+    
+    for pattern in json_patterns:
+        match = re.match(pattern, text, re.DOTALL)
+        if match:
+            text = match.group(1)
+            # Remove trailing "} if present from truncated JSON
+            if text.endswith('"}'):
+                text = text[:-2]
+            elif text.endswith('"'):
+                text = text[:-1]
+            break
+    
+    # Also try standard JSON parsing
+    if text.strip().startswith('{'):
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                for key in ["answer", "output", "result", "report", "content"]:
+                    if key in parsed:
+                        text = str(parsed[key])
+                        break
+        except (json.JSONDecodeError, TypeError):
+            pass  # Keep text as-is if JSON parsing fails
+    
+    # Ensure text is a string
+    text = str(text) if not isinstance(text, str) else text
+    
+    # Replace literal escape sequences with actual characters
+    text = text.replace('\\n', '\n')
+    text = text.replace('\\t', '\t')
+    text = text.replace('\\r', '\r')
+    
+    # Clean up any excessive newlines (more than 3 consecutive)
+    while '\n\n\n\n' in text:
+        text = text.replace('\n\n\n\n', '\n\n\n')
+    
+    return text.strip()
 
 
 def build_model(
@@ -62,10 +156,16 @@ def build_model(
     api_key: Optional[str] = None,
     hf_token: Optional[str] = None,
     api_base: Optional[str] = None,
+    temperature: float = DEFAULT_TEMPERATURE,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
 ):
     """Create an LLM model instance for CodeAgent."""
     if provider == "litellm":
-        kwargs = {"model_id": model_id}
+        kwargs = {
+            "model_id": model_id,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
         if api_key:
             kwargs["api_key"] = api_key
         if api_base:
@@ -73,7 +173,12 @@ def build_model(
         return LiteLLMModel(**kwargs)
     else:
         token = hf_token or os.getenv("HF_TOKEN")
-        return InferenceClientModel(model_id=model_id, token=token)
+        return InferenceClientModel(
+            model_id=model_id,
+            token=token,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
 
 
 def build_agent(
@@ -100,7 +205,6 @@ def build_agent(
         "additional_authorized_imports": additional_imports,
     }
     
-    # Add executor type for sandboxed execution
     if executor_type in ("e2b", "docker"):
         agent_kwargs["executor_type"] = executor_type
     
@@ -119,31 +223,44 @@ TOOLS TO CALL:
 3. connors_zscore_analysis(symbol="{symbol}", period="{period}")
 4. dual_moving_average_analysis(symbol="{symbol}", period="{period}")
 
+Write Python code to:
+1. Call all 4 strategy tools
+2. Parse the results to extract signals and metrics
+3. Build a professional markdown report
+
 REQUIRED CODE STRUCTURE:
 ```python
 import json
 import re
 
-# Call all 4 strategies
+# Call all 4 strategy tools
 bb_result = bollinger_fibonacci_analysis(symbol="{symbol}", period="{period}")
 macd_result = macd_donchian_analysis(symbol="{symbol}", period="{period}")
 connors_result = connors_zscore_analysis(symbol="{symbol}", period="{period}")
 dual_ma_result = dual_moving_average_analysis(symbol="{symbol}", period="{period}")
 
-# Helper function to extract signal
+# Helper function to extract signal from result
 def get_signal(result):
     text = result.upper()
     if "STRONG BUY" in text:
         return "STRONG BUY"
     elif "STRONG SELL" in text:
         return "STRONG SELL"
-    elif "BUY" in text and "SELL" not in text[:text.find("BUY")+10]:
+    elif "BUY" in text:
         return "BUY"
     elif "SELL" in text:
         return "SELL"
     return "HOLD"
 
-# Extract signals from each strategy
+# Helper to extract numeric value after a label
+def extract_value(text, label):
+    pattern = label + r"[:\\s]+([\\-]?[\\d.]+)"
+    match = re.search(pattern, text, re.IGNORECASE)
+    if match:
+        return match.group(1)
+    return "N/A"
+
+# Parse signals
 bb_signal = get_signal(bb_result)
 macd_signal = get_signal(macd_result)
 connors_signal = get_signal(connors_result)
@@ -155,124 +272,143 @@ buy_count = sum(1 for s in signals if "BUY" in s)
 sell_count = sum(1 for s in signals if "SELL" in s)
 hold_count = 4 - buy_count - sell_count
 
-# Determine consensus
+# Determine overall recommendation
 if buy_count >= 3:
-    consensus = "STRONG BUY"
+    overall = "STRONG BUY" if buy_count == 4 else "BUY"
     confidence = "HIGH"
+    outlook = "BULLISH"
 elif buy_count >= 2:
-    consensus = "BUY"
+    overall = "BUY"
     confidence = "MEDIUM"
+    outlook = "MODERATELY BULLISH"
 elif sell_count >= 3:
-    consensus = "STRONG SELL"
+    overall = "STRONG SELL" if sell_count == 4 else "SELL"
     confidence = "HIGH"
+    outlook = "BEARISH"
 elif sell_count >= 2:
-    consensus = "SELL"
+    overall = "SELL"
     confidence = "MEDIUM"
+    outlook = "MODERATELY BEARISH"
 else:
-    consensus = "HOLD"
+    overall = "HOLD"
     confidence = "LOW"
+    outlook = "NEUTRAL"
 
-# Build structured report (NO TABLES - use lists instead)
-report = f'''
-{symbol} TECHNICAL ANALYSIS REPORT
-Period: {period}
+# Determine momentum and trend
+momentum = "Positive" if buy_count > sell_count else "Negative" if sell_count > buy_count else "Neutral"
+trend = "Upward" if buy_count >= 3 else "Downward" if sell_count >= 3 else "Sideways"
+risk = "Low" if buy_count >= 3 or sell_count >= 3 else "Medium" if buy_count >= 2 or sell_count >= 2 else "High"
 
-================================================================================
-1. EXECUTIVE SUMMARY
-================================================================================
+# Build professional report
+report = "# {symbol} Technical Analysis Report\\n\\n"
+report += "## Executive Summary\\n\\n"
+report += f"Analysis of {symbol} using four technical scoring systems reveals a **{{outlook}}** outlook.\\n\\n"
+report += "**Analysis Period:** {period}\\n\\n"
+report += "---\\n\\n"
 
-Symbol: {symbol}
-Analysis Period: {period}
-Overall Recommendation: {{consensus}}
-Confidence Level: {{confidence}}
+report += "## Technical Indicators Summary Table\\n\\n"
+report += "| Indicator System | Signal | Key Findings |\\n"
+report += "|-----------------|--------|--------------|\\n"
+report += f"| **Bollinger-Fibonacci** | {{bb_signal}} | Strategy analysis complete |\\n"
+report += f"| **MACD-Donchian Combined** | {{macd_signal}} | Strategy analysis complete |\\n"
+report += f"| **Connors RSI + Z-Score** | {{connors_signal}} | Strategy analysis complete |\\n"
+report += f"| **Dual Moving Average** | {{dual_ma_signal}} | Strategy analysis complete |\\n\\n"
+report += "---\\n\\n"
 
-================================================================================
-2. STRATEGY RESULTS
-================================================================================
+report += "## Detailed Analysis\\n\\n"
+report += "### 1. Bollinger-Fibonacci Strategy\\n\\n"
+report += f"- **Signal:** {{bb_signal}}\\n\\n"
+report += f"**Full Analysis:**\\n\\n{{bb_result}}\\n\\n"
+report += "---\\n\\n"
 
-2.1 Bollinger Bands and Fibonacci Retracement
-Signal: {{bb_signal}}
-Analysis Output:
-{{bb_result[:800]}}
+report += "### 2. MACD-Donchian Combined Strategy\\n\\n"
+report += f"- **Signal:** {{macd_signal}}\\n\\n"
+report += f"**Full Analysis:**\\n\\n{{macd_result}}\\n\\n"
+report += "---\\n\\n"
 
-2.2 MACD-Donchian Combined
-Signal: {{macd_signal}}
-Analysis Output:
-{{macd_result[:800]}}
+report += "### 3. Connors RSI + Z-Score Combined Strategy\\n\\n"
+report += f"- **Signal:** {{connors_signal}}\\n\\n"
+report += f"**Full Analysis:**\\n\\n{{connors_result}}\\n\\n"
+report += "---\\n\\n"
 
-2.3 Connors RSI and Z-Score Combined
-Signal: {{connors_signal}}
-Analysis Output:
-{{connors_result[:800]}}
+report += "### 4. Dual Moving Average (50/200 EMA) Strategy\\n\\n"
+report += f"- **Signal:** {{dual_ma_signal}}\\n\\n"
+report += f"**Full Analysis:**\\n\\n{{dual_ma_result}}\\n\\n"
+report += "---\\n\\n"
 
-2.4 Dual Moving Average Crossover
-Signal: {{dual_ma_signal}}
-Analysis Output:
-{{dual_ma_result[:800]}}
+report += "## Consensus Analysis\\n\\n"
+report += f"### Overall Technical Health: **{{outlook}}**\\n\\n"
+report += "| Metric | Status |\\n"
+report += "|--------|--------|\\n"
+report += f"| **Trend Direction** | {{trend}} |\\n"
+report += f"| **Momentum** | {{momentum}} |\\n"
+report += f"| **Risk Level** | {{risk}} |\\n\\n"
 
-================================================================================
-3. SIGNAL CONSENSUS
-================================================================================
+report += "### Signal Breakdown\\n\\n"
+report += f"- **BUY Signals:** {{buy_count}}/4\\n\\n"
+report += f"- **SELL Signals:** {{sell_count}}/4\\n\\n"
+report += f"- **HOLD Signals:** {{hold_count}}/4\\n\\n"
+report += f"- **Consensus Direction:** {{outlook}}\\n\\n"
+report += "---\\n\\n"
 
-Signal Count: {{buy_count}} BUY, {{sell_count}} SELL, {{hold_count}} HOLD
-Consensus Direction: {{"BULLISH" if buy_count > sell_count else "BEARISH" if sell_count > buy_count else "NEUTRAL"}}
-Consensus Strength: {{confidence}}
+report += f"## 🎯 FINAL RECOMMENDATION: **{{overall}}**\\n\\n"
+report += "### Action Plan\\n\\n"
 
-================================================================================
-4. STRATEGY SIGNALS SUMMARY
-================================================================================
+if "BUY" in overall:
+    report += f"**For Current {symbol} Holders:**\\n\\n"
+    report += "- ✅ HOLD and consider adding to position\\n\\n"
+    report += "- ✅ Set trailing stop-loss to protect gains\\n\\n"
+    report += "- ❌ Do NOT sell prematurely\\n\\n"
+    report += f"**For Potential Buyers:**\\n\\n"
+    report += "- BUY at current levels with proper position sizing\\n\\n"
+    report += "- ⏳ Key triggers to watch:\\n\\n"
+    report += "  - 📊 Volume confirmation on breakouts\\n\\n"
+    report += "  - 📊 Support levels holding\\n\\n"
+elif "SELL" in overall:
+    report += f"**For Current {symbol} Holders:**\\n\\n"
+    report += "- ✅ Consider reducing position size\\n\\n"
+    report += "- ✅ Set tight stop-loss levels\\n\\n"
+    report += "- ❌ Do NOT add to positions\\n\\n"
+    report += f"**For Potential Buyers:**\\n\\n"
+    report += "- WAIT for better entry points\\n\\n"
+    report += "- ⏳ Key triggers to watch:\\n\\n"
+    report += "  - 📊 Reversal signals\\n\\n"
+    report += "  - 📊 Support levels\\n\\n"
+else:
+    report += f"**For Current {symbol} Holders:**\\n\\n"
+    report += "- ✅ HOLD current positions\\n\\n"
+    report += "- ✅ Monitor for direction confirmation\\n\\n"
+    report += "- ❌ Avoid large new positions\\n\\n"
+    report += f"**For Potential Buyers:**\\n\\n"
+    report += "- WAIT for clearer signals\\n\\n"
+    report += "- ⏳ Key triggers to watch:\\n\\n"
+    report += "  - 📊 Breakout above resistance\\n\\n"
+    report += "  - 📊 All indicators turning positive\\n\\n"
 
-- Bollinger-Fibonacci: {{bb_signal}}
-- MACD-Donchian: {{macd_signal}}
-- Connors RSI-ZScore: {{connors_signal}}
-- Dual Moving Average: {{dual_ma_signal}}
+report += "---\\n\\n"
+report += "## Risk Management\\n\\n"
+report += "- **Position Size:** Maximum 2-5% of portfolio\\n\\n"
+report += "- **Stop Loss:** Set based on recent support levels\\n\\n"
+report += "- **Take Profit:** Set based on resistance levels\\n\\n"
+report += "---\\n\\n"
 
-================================================================================
-5. FINAL RECOMMENDATION
-================================================================================
-
-Action: {{consensus}}
-Confidence: {{confidence}}
-
-Rationale:
-Based on the analysis of 4 technical strategies:
-- {{buy_count}} strategies indicate BUY signals
-- {{sell_count}} strategies indicate SELL signals
-- {{hold_count}} strategies indicate HOLD signals
-
-The majority consensus supports a {{consensus}} recommendation.
-
-Supporting Evidence:
-- Bollinger-Fibonacci analysis shows {{bb_signal}} signal
-- MACD-Donchian analysis shows {{macd_signal}} signal
-- Connors RSI-ZScore analysis shows {{connors_signal}} signal
-- Dual Moving Average analysis shows {{dual_ma_signal}} signal
-
-================================================================================
-6. RISK FACTORS
-================================================================================
-
-- Strategy disagreement: {{4 - max(buy_count, sell_count, hold_count)}} out of 4 strategies show different signals
-- Market conditions may change rapidly
-- Past performance does not guarantee future results
-'''
+report += "## Conclusion\\n\\n"
+report += f"Based on comprehensive analysis using four technical strategies, {symbol} shows a **{{outlook}}** outlook with {{buy_count}}/4 bullish signals. "
+report += f"The recommendation is **{{overall}}** with **{{confidence}}** confidence. "
+report += "Always conduct your own due diligence before investing.\\n\\n"
+report += "**Disclaimer:** This analysis is for educational purposes only.\\n\\n"
 
 final_answer(report)
 ```
 
-CRITICAL REQUIREMENTS:
-1. EXTRACT actual data from tool results - include the tool output in the report
-2. Use numbered sections (1., 2., 2.1, etc.) for clear organization
-3. Do NOT use markdown tables with pipe characters - they render poorly
-4. Do NOT use italic text (no asterisks for emphasis)
-5. Use USD for currency values (never use the dollar sign symbol)
-6. Connect the recommendation to the specific data points
-
-Write complete code that parses tool outputs and builds a well-documented report.
+REQUIREMENTS:
+1. Extract REAL data from tool results
+2. Use markdown tables for summary
+3. Use emojis (✅, ❌, ⏳, 📊, 🎯) for scannability
+4. Include action plans for holders and buyers
+5. Use USD for currency (never use dollar sign)
 """
 
-# NOTE: In MARKET_SCANNER_PROMPT, all occurrences of {stock} must be escaped as {{stock}}
-# because this string uses .format() for symbols, symbol_list, and period.
 MARKET_SCANNER_PROMPT = """Scan and compare these stocks: {symbols}
 
 TOOLS TO CALL (for each stock):
@@ -281,7 +417,8 @@ TOOLS TO CALL (for each stock):
 3. connors_zscore_analysis(symbol, period)
 4. dual_moving_average_analysis(symbol, period)
 
-REQUIRED CODE STRUCTURE:
+Write Python code to analyze all stocks and create a professional ranking report.
+
 ```python
 import json
 import re
@@ -289,7 +426,6 @@ import re
 stocks = {symbol_list}
 period = "{period}"
 
-# Helper function to extract signal
 def get_signal(result):
     text = result.upper()
     if "STRONG BUY" in text:
@@ -320,7 +456,7 @@ for stock in stocks:
         "dual_ma": dual_moving_average_analysis(symbol=stock, period=period),
     }}
 
-# Parse results for each stock
+# Parse results
 stock_summaries = {{}}
 for stock, results in all_data.items():
     buy_count = count_buy_signals(results)
@@ -332,143 +468,96 @@ for stock, results in all_data.items():
         "dual_ma_signal": get_signal(results["dual_ma"]),
     }}
 
-# Rank stocks by buy signal count
+# Rank stocks
 ranked = sorted(stock_summaries.items(), key=lambda x: x[1]["buy_count"], reverse=True)
 
-# Determine top picks and stocks to avoid
-top_picks = [stock for stock, data in ranked if data["buy_count"] >= 3]
-stocks_to_avoid = [stock for stock, data in ranked if data["buy_count"] == 0]
+# Get recommendations
+def get_recommendation(buy_count):
+    if buy_count >= 3:
+        return "STRONG BUY"
+    elif buy_count >= 2:
+        return "BUY"
+    elif buy_count >= 1:
+        return "HOLD"
+    return "AVOID"
 
-# Build structured report (NO TABLES - use lists instead)
-report = f'''
-MARKET SCANNER REPORT
-Stocks Analyzed: {{", ".join(stocks)}}
-Period: {{period}}
+def get_outlook(buy_count):
+    if buy_count >= 3:
+        return "BULLISH"
+    elif buy_count >= 2:
+        return "MODERATELY BULLISH"
+    elif buy_count >= 1:
+        return "NEUTRAL"
+    return "BEARISH"
 
-================================================================================
-1. MARKET SCANNER OVERVIEW
-================================================================================
+# Build report
+report = "# Market Scanner Report\\n\\n"
+report += "## Executive Summary\\n\\n"
+report += f"Scanned {{len(stocks)}} stocks using four technical strategies.\\n\\n"
+report += f"**Stocks Analyzed:** {{', '.join(stocks)}}\\n\\n"
+report += f"**Analysis Period:** {{period}}\\n\\n"
+report += "---\\n\\n"
 
-Stocks analyzed: {{", ".join(stocks)}}
-Analysis period: {{period}}
-Total stocks: {{len(stocks)}}
-
-================================================================================
-2. STOCK RANKINGS (Best to Worst)
-================================================================================
-'''
-
+report += "## Stock Rankings Summary Table\\n\\n"
+report += "| Rank | Symbol | BUY Signals | Overall Signal | Recommendation |\\n"
+report += "|------|--------|-------------|----------------|----------------|\\n"
 for i, (stock, data) in enumerate(ranked, 1):
-    rec = "STRONG BUY" if data["buy_count"] >= 3 else "BUY" if data["buy_count"] >= 2 else "HOLD" if data["buy_count"] >= 1 else "AVOID"
-    report += f'''
-Rank {{i}}: {{stock}}
-- Buy Signals: {{data["buy_count"]}}/4 strategies
-- Recommendation: {{rec}}
-'''
+    rec = get_recommendation(data["buy_count"])
+    outlook = get_outlook(data["buy_count"])
+    report += f"| {{i}} | **{{stock}}** | {{data['buy_count']}}/4 | {{outlook}} | {{rec}} |\\n"
+report += "\\n---\\n\\n"
 
-report += '''
+report += "## Detailed Stock Analysis\\n\\n"
+medals = ["🥇", "🥈", "🥉"]
+for i, (stock, data) in enumerate(ranked, 1):
+    medal = medals[i-1] if i <= 3 else ""
+    report += f"### {{medal}} Rank {{i}}: {{stock}}\\n\\n"
+    report += "**Signal Breakdown:**\\n\\n"
+    report += "| Strategy | Signal |\\n"
+    report += "|----------|--------|\\n"
+    report += f"| Bollinger-Fibonacci | {{data['bb_signal']}} |\\n"
+    report += f"| MACD-Donchian | {{data['macd_signal']}} |\\n"
+    report += f"| Connors RSI-ZScore | {{data['connors_signal']}} |\\n"
+    report += f"| Dual Moving Average | {{data['dual_ma_signal']}} |\\n\\n"
+    report += f"**Verdict:** {{data['buy_count']}}/4 BUY signals - {{get_recommendation(data['buy_count'])}}\\n\\n"
+    report += "---\\n\\n"
 
-================================================================================
-3. DETAILED STOCK ANALYSIS
-================================================================================
-'''
+# Top picks and avoid
+top_picks = [(s, d) for s, d in ranked if d["buy_count"] >= 3]
+to_avoid = [(s, d) for s, d in ranked if d["buy_count"] == 0]
 
-for i, stock in enumerate(stocks, 1):
-    data = stock_summaries[stock]
-    results = all_data[stock]
-    
-    report += f'''
-3.{{i}} {{stock}}
-
-Strategy Signals:
-- Bollinger-Fibonacci: {{data["bb_signal"]}}
-- MACD-Donchian: {{data["macd_signal"]}}
-- Connors RSI-ZScore: {{data["connors_signal"]}}
-- Dual Moving Average: {{data["dual_ma_signal"]}}
-
-Signal Consensus: {{data["buy_count"]}}/4 strategies bullish
-
-Key Data from Tools:
-BB-Fib Output: {{results["bb"][:300]}}...
-MACD Output: {{results["macd"][:300]}}...
-
-'''
-
-report += f'''
-================================================================================
-4. RECOMMENDATIONS
-================================================================================
-
-Top Picks (3+ BUY signals):
-'''
-
+report += "## 🎯 TOP PICKS\\n\\n"
+report += "### Best Opportunities (3+ BUY signals):\\n\\n"
 if top_picks:
-    for i, stock in enumerate(top_picks, 1):
-        data = stock_summaries[stock]
-        report += f"{{i}}. {{stock}} - {{data['buy_count']}}/4 BUY signals\\n"
+    for i, (stock, data) in enumerate(top_picks, 1):
+        report += f"{{i}}. **{{stock}}** - {{data['buy_count']}}/4 BUY signals\\n\\n"
 else:
-    report += "No stocks with 3+ BUY signals\\n"
+    report += "No stocks with 3+ BUY signals in this scan.\\n\\n"
 
-report += '''
-Stocks to Avoid (0 BUY signals):
-'''
-
-if stocks_to_avoid:
-    for i, stock in enumerate(stocks_to_avoid, 1):
-        report += f"{{i}}. {{stock}} - 0/4 BUY signals\\n"
+report += "### Stocks to Avoid (0 BUY signals):\\n\\n"
+if to_avoid:
+    for i, (stock, data) in enumerate(to_avoid, 1):
+        report += f"{{i}}. **{{stock}}** - 0/4 BUY signals\\n\\n"
 else:
-    report += "No stocks with 0 BUY signals\\n"
+    report += "No stocks with 0 BUY signals in this scan.\\n\\n"
 
+report += "---\\n\\n"
+report += "## Market Sentiment\\n\\n"
 total_buy = sum(d["buy_count"] for d in stock_summaries.values())
 avg_buy = total_buy / len(stocks)
-
-report += f'''
-
-================================================================================
-5. MARKET ASSESSMENT
-================================================================================
-
-Total BUY signals across all stocks: {{total_buy}}
-Average BUY signals per stock: {{avg_buy:.1f}}
-Market Sentiment: {{"BULLISH" if avg_buy >= 2 else "NEUTRAL" if avg_buy >= 1 else "BEARISH"}}
-
-================================================================================
-6. REFERENCE DATA (Full Tool Outputs)
-================================================================================
-'''
-
-for stock in stocks:
-    results = all_data[stock]
-    report += f'''
---- {{stock}} ---
-
-BOLLINGER-FIBONACCI:
-{{results["bb"]}}
-
-MACD-DONCHIAN:
-{{results["macd"]}}
-
-CONNORS RSI-ZSCORE:
-{{results["connors"]}}
-
-DUAL MOVING AVERAGE:
-{{results["dual_ma"]}}
-
-'''
+sentiment = "BULLISH" if avg_buy >= 2 else "NEUTRAL" if avg_buy >= 1 else "BEARISH"
+report += f"- **Average BUY Signals:** {{avg_buy:.1f}}/4 across all stocks\\n\\n"
+report += f"- **Market Outlook:** {{sentiment}}\\n\\n"
+report += "\\n**Disclaimer:** This analysis is for educational purposes only.\\n\\n"
 
 final_answer(report)
 ```
 
-CRITICAL REQUIREMENTS:
-1. EXTRACT actual data from each tool result
-2. Use numbered sections for organization
-3. Do NOT use markdown tables with pipe characters - they render poorly
-4. Do NOT use italic text
-5. Use USD for currency (never use the dollar sign symbol)
-6. Include tool outputs in the reference section
-7. Rank based on actual signal counts
-
-Write complete code that extracts real data and builds an informative, well-documented report.
+REQUIREMENTS:
+1. Extract REAL data from each tool result
+2. Use markdown tables for rankings
+3. Include medals (🥇, 🥈, 🥉) for top 3
+4. Show top picks and stocks to avoid
 """
 
 FUNDAMENTAL_ANALYSIS_PROMPT = """Analyze {symbol} fundamentals.
@@ -476,333 +565,160 @@ FUNDAMENTAL_ANALYSIS_PROMPT = """Analyze {symbol} fundamentals.
 TOOL TO CALL:
 fundamental_analysis_report(symbol="{symbol}", period="{period}")
 
-REQUIRED CODE:
 ```python
 import re
 
-# Get fundamental analysis
 fund_data = fundamental_analysis_report(symbol="{symbol}", period="{period}")
 
-# The tool returns detailed financial data
-# Parse key metrics if possible
-def extract_value(text, pattern, default="N/A"):
-    match = re.search(pattern, text, re.IGNORECASE)
-    return match.group(1) if match else default
-
-# Determine overall assessment
+# Determine assessment
 if "STRONG" in fund_data.upper() and "BUY" in fund_data.upper():
     assessment = "STRONG BUY"
-    health = "EXCELLENT"
+    health = "STRONG"
+    grade = "A"
 elif "BUY" in fund_data.upper():
     assessment = "BUY"
     health = "GOOD"
+    grade = "B"
 elif "SELL" in fund_data.upper():
     assessment = "SELL"
     health = "WEAK"
+    grade = "D"
 else:
     assessment = "HOLD"
     health = "MODERATE"
+    grade = "C"
 
-# Build structured report
-report = f'''
-{symbol} FUNDAMENTAL ANALYSIS REPORT
-Period: {period}
+report = "# {symbol} Fundamental Analysis Report\\n\\n"
+report += "## Executive Summary\\n\\n"
+report += "**Company:** {symbol}\\n\\n"
+report += "**Analysis Period:** {period}\\n\\n"
+report += f"**Financial Health:** {{health}}\\n\\n"
+report += f"**Investment Grade:** {{grade}}\\n\\n"
+report += "---\\n\\n"
 
-================================================================================
-1. COMPANY OVERVIEW
-================================================================================
-Symbol: {symbol}
-Analysis Period: {period}
+report += "## Financial Data\\n\\n"
+report += f"{{fund_data}}\\n\\n"
+report += "---\\n\\n"
 
-================================================================================
-2. FINANCIAL DATA FROM TOOL
-================================================================================
-The fundamental_analysis_report tool returned the following data:
-
-{{fund_data}}
-
-================================================================================
-3. FINANCIAL HEALTH ASSESSMENT
-================================================================================
-Based on the tool output above:
-- Overall Financial Health: {{health}}
-- Investment Assessment: {{assessment}}
-
-================================================================================
-4. KEY OBSERVATIONS
-================================================================================
-(Extracted from the tool output above)
-
-The financial data shows the following key points:
-- Revenue and profitability trends are visible in the tool output
-- Balance sheet strength indicators are included
-- Cash flow metrics provide liquidity insights
-
-================================================================================
-5. INVESTMENT RECOMMENDATION
-================================================================================
-Action: {{assessment}}
-
-Rationale:
-This recommendation is based on the financial metrics provided in Section 2.
-The fundamental analysis tool has evaluated:
-- Income statement metrics
-- Balance sheet health
-- Cash flow sustainability
-- Key financial ratios
-
-Supporting Evidence:
-Please refer to Section 2 above for the complete financial data that supports
-this recommendation. Key metrics from the tool output include revenue trends,
-profitability margins, debt levels, and cash flow status.
-
-================================================================================
-6. RISK FACTORS
-================================================================================
-- Financial markets are subject to volatility
-- Company-specific risks may exist
-- Economic conditions affect all investments
-- Past financial performance does not guarantee future results
-
-================================================================================
-7. DISCLAIMER
-================================================================================
-This analysis is based on historical financial data. Investors should conduct
-their own due diligence and consider consulting a financial advisor.
-'''
+report += f"## 🎯 RECOMMENDATION: **{{assessment}}**\\n\\n"
+report += f"**Rationale:** Based on the fundamental analysis, {symbol} shows {{health.lower()}} financial health with an investment grade of {{grade}}.\\n\\n"
+report += "**Disclaimer:** This analysis is for educational purposes only.\\n\\n"
 
 final_answer(report)
 ```
-
-REQUIREMENTS:
-1. Include the COMPLETE tool output in the report (Section 2)
-2. Use numbered sections for clear organization
-3. Do NOT use italic text
-4. Use USD for currency values (never use $ symbol)
-5. Make the connection between data and recommendation explicit
 """
 
-MULTI_SECTOR_PROMPT = """Analyze multiple sectors and compare them.
+MULTI_SECTOR_PROMPT = """Analyze multiple sectors:
 
-SECTORS:
 {sector_details}
 
-TOOLS (call for each stock in each sector):
-1. bollinger_fibonacci_analysis(symbol, period)
-2. macd_donchian_analysis(symbol, period)
-3. connors_zscore_analysis(symbol, period)
-4. dual_moving_average_analysis(symbol, period)
+Period: {period}
 
-REQUIRED CODE:
 ```python
 import json
-import re
 
 sectors = {sectors_dict}
 period = "{period}"
 
 def get_signal(result):
-    if "STRONG BUY" in result.upper():
+    text = result.upper()
+    if "STRONG BUY" in text:
         return "STRONG BUY"
-    elif "STRONG SELL" in result.upper():
+    elif "STRONG SELL" in text:
         return "STRONG SELL"
-    elif "BUY" in result.upper():
+    elif "BUY" in text:
         return "BUY"
-    elif "SELL" in result.upper():
+    elif "SELL" in text:
         return "SELL"
     return "HOLD"
 
-def count_buy_signals(results):
+def count_buy_signals(bb, macd, connors, dual_ma):
     count = 0
-    for result in results.values():
-        signal = get_signal(result)
-        if "BUY" in signal:
+    for result in [bb, macd, connors, dual_ma]:
+        if "BUY" in get_signal(result):
             count += 1
     return count
 
-# Collect data for all stocks in all sectors
+# Analyze all sectors
 all_data = {{}}
 sector_summaries = {{}}
 
 for sector_name, symbols_str in sectors.items():
-    stock_list = [s.strip() for s in symbols_str.split(",")]
+    stocks = [s.strip() for s in symbols_str.split(",")][:5]
     all_data[sector_name] = {{}}
-    sector_buy_total = 0
-    sector_best_stock = None
-    sector_best_count = -1
     
-    for stock in stock_list:
-        results = {{
-            "bb": bollinger_fibonacci_analysis(symbol=stock, period=period),
-            "macd": macd_donchian_analysis(symbol=stock, period=period),
-            "connors": connors_zscore_analysis(symbol=stock, period=period),
-            "dual_ma": dual_moving_average_analysis(symbol=stock, period=period),
-        }}
-        all_data[sector_name][stock] = results
+    sector_buy = 0
+    best_stock = None
+    best_count = -1
+    
+    for stock in stocks:
+        bb = bollinger_fibonacci_analysis(symbol=stock, period=period)
+        macd = macd_donchian_analysis(symbol=stock, period=period)
+        connors = connors_zscore_analysis(symbol=stock, period=period)
+        dual_ma = dual_moving_average_analysis(symbol=stock, period=period)
         
-        buy_count = count_buy_signals(results)
-        sector_buy_total += buy_count
-        if buy_count > sector_best_count:
-            sector_best_count = buy_count
-            sector_best_stock = stock
+        buy_count = count_buy_signals(bb, macd, connors, dual_ma)
+        all_data[sector_name][stock] = {{"buy_count": buy_count}}
+        sector_buy += buy_count
+        
+        if buy_count > best_count:
+            best_count = buy_count
+            best_stock = stock
     
-    avg_buy = sector_buy_total / len(stock_list) if stock_list else 0
+    avg = sector_buy / len(stocks) if stocks else 0
     sector_summaries[sector_name] = {{
-        "stocks": stock_list,
-        "total_buy_signals": sector_buy_total,
-        "avg_buy_signals": avg_buy,
-        "best_stock": sector_best_stock,
-        "best_stock_signals": sector_best_count,
-        "outlook": "BULLISH" if avg_buy >= 2 else "NEUTRAL" if avg_buy >= 1 else "BEARISH"
+        "avg": avg,
+        "best_stock": best_stock,
+        "best_count": best_count,
+        "outlook": "BULLISH" if avg >= 2 else "NEUTRAL" if avg >= 1 else "BEARISH"
     }}
 
-# Rank sectors
-ranked_sectors = sorted(sector_summaries.items(), key=lambda x: x[1]["avg_buy_signals"], reverse=True)
-
-# Find top picks across all sectors
-all_stocks_ranked = []
-for sector_name, stocks_data in all_data.items():
-    for stock, results in stocks_data.items():
-        buy_count = count_buy_signals(results)
-        all_stocks_ranked.append((stock, sector_name, buy_count))
-all_stocks_ranked.sort(key=lambda x: x[2], reverse=True)
+ranked_sectors = sorted(sector_summaries.items(), key=lambda x: x[1]["avg"], reverse=True)
 
 # Build report
-report = f'''
-MULTI-SECTOR ANALYSIS REPORT
-Period: {{period}}
+report = "# Multi-Sector Analysis Report\\n\\n"
+report += "## Executive Summary\\n\\n"
+report += f"**Sectors Analyzed:** {{', '.join(sectors.keys())}}\\n\\n"
+report += f"**Analysis Period:** {{period}}\\n\\n"
+report += f"**Strongest Sector:** {{ranked_sectors[0][0]}}\\n\\n"
+report += f"**Weakest Sector:** {{ranked_sectors[-1][0]}}\\n\\n"
+report += "---\\n\\n"
 
-================================================================================
-1. MULTI-SECTOR ANALYSIS OVERVIEW
-================================================================================
-Sectors analyzed: {{", ".join(sectors.keys())}}
-Total stocks analyzed: {{sum(len(s["stocks"]) for s in sector_summaries.values())}}
-Analysis period: {{period}}
+report += "## Sector Rankings Summary Table\\n\\n"
+report += "| Rank | Sector | Avg BUY Signals | Best Stock | Outlook |\\n"
+report += "|------|--------|-----------------|------------|---------|\\n"
+for i, (sector, data) in enumerate(ranked_sectors, 1):
+    report += f"| {{i}} | {{sector}} | {{data['avg']:.1f}}/4 | {{data['best_stock']}} | {{data['outlook']}} |\\n"
+report += "\\n---\\n\\n"
 
-================================================================================
-2. SECTOR-BY-SECTOR RESULTS
-================================================================================
-'''
+# Top picks across sectors
+all_stocks = []
+for sector, stocks_data in all_data.items():
+    for stock, data in stocks_data.items():
+        all_stocks.append((stock, sector, data["buy_count"]))
+all_stocks.sort(key=lambda x: x[2], reverse=True)
 
-for i, (sector_name, summary) in enumerate(ranked_sectors, 1):
-    report += f'''
-2.{{i}} {{sector_name}}
-    Stocks analyzed: {{", ".join(summary["stocks"])}}
-    Total BUY signals: {{summary["total_buy_signals"]}}
-    Average BUY signals per stock: {{summary["avg_buy_signals"]:.1f}}/4
-    Best performer: {{summary["best_stock"]}} with {{summary["best_stock_signals"]}}/4 BUY signals
-    Sector Outlook: {{summary["outlook"]}}
-'''
+report += "## 🎯 TOP PICKS ACROSS ALL SECTORS\\n\\n"
+for i, (stock, sector, buy_count) in enumerate(all_stocks[:5], 1):
+    rec = "STRONG BUY" if buy_count >= 3 else "BUY" if buy_count >= 2 else "HOLD"
+    report += f"{{i}}. **{{stock}}** ({{sector}}) - {{buy_count}}/4 BUY signals - {{rec}}\\n\\n"
 
-report += '''
-
-================================================================================
-3. CROSS-SECTOR COMPARISON
-================================================================================
-| Rank | Sector | Stocks | Avg Buy Signals | Best Stock | Outlook |
-|------|--------|--------|-----------------|------------|---------|
-'''
-
-for i, (sector_name, summary) in enumerate(ranked_sectors, 1):
-    report += f"| {{i}} | {{sector_name}} | {{len(summary['stocks'])}} | {{summary['avg_buy_signals']:.1f}}/4 | {{summary['best_stock']}} | {{summary['outlook']}} |\\n"
-
-report += f'''
-
-================================================================================
-4. TOP PICKS ACROSS ALL SECTORS
-================================================================================
-'''
-
-for i, (stock, sector, buy_count) in enumerate(all_stocks_ranked[:5], 1):
-    report += f'''
-4.{{i}} {{stock}} ({{sector}})
-    BUY signals: {{buy_count}}/4
-    Recommendation: {{"STRONG BUY" if buy_count >= 3 else "BUY" if buy_count >= 2 else "HOLD"}}
-'''
-
-report += f'''
-
-================================================================================
-5. PORTFOLIO ALLOCATION BY SECTOR
-================================================================================
-Based on sector strength (higher allocation to stronger sectors):
-'''
-
-total_avg = sum(s["avg_buy_signals"] for s in sector_summaries.values())
-for sector_name, summary in ranked_sectors:
-    if total_avg > 0:
-        allocation = (summary["avg_buy_signals"] / total_avg) * 100
-    else:
-        allocation = 100 / len(sector_summaries)
-    report += f"- {{sector_name}}: {{allocation:.0f}}% allocation ({{summary['outlook']}} outlook)\\n"
-
-report += f'''
-
-================================================================================
-6. OVERALL MARKET ASSESSMENT
-================================================================================
-Strongest Sector: {{ranked_sectors[0][0]}} with {{ranked_sectors[0][1]["avg_buy_signals"]:.1f}} avg BUY signals
-Weakest Sector: {{ranked_sectors[-1][0]}} with {{ranked_sectors[-1][1]["avg_buy_signals"]:.1f}} avg BUY signals
-
-Market Sentiment: {{"BULLISH" if sum(s["avg_buy_signals"] for s in sector_summaries.values()) / len(sector_summaries) >= 2 else "NEUTRAL" if sum(s["avg_buy_signals"] for s in sector_summaries.values()) / len(sector_summaries) >= 1 else "BEARISH"}}
-
-================================================================================
-7. STRATEGIC RECOMMENDATIONS
-================================================================================
-Primary Recommendation:
-Focus on {{ranked_sectors[0][0]}} sector with strongest technical signals.
-Best individual pick: {{all_stocks_ranked[0][0]}} from {{all_stocks_ranked[0][1]}} with {{all_stocks_ranked[0][2]}}/4 BUY signals.
-
-Alternative Strategy:
-Diversify across top 2-3 sectors with above-average signals.
-
-================================================================================
-8. DETAILED SECTOR DATA (Reference)
-================================================================================
-'''
-
-for sector_name, stocks_data in all_data.items():
-    report += f'''
---- {{sector_name}} ---
-'''
-    for stock, results in stocks_data.items():
-        report += f'''
-{{stock}}:
-  BB-Fib Signal: {{get_signal(results["bb"])}}
-  MACD Signal: {{get_signal(results["macd"])}}
-  Connors Signal: {{get_signal(results["connors"])}}
-  DualMA Signal: {{get_signal(results["dual_ma"])}}
-'''
+report += "---\\n\\n"
+report += "**Disclaimer:** This analysis is for educational purposes only.\\n\\n"
 
 final_answer(report)
 ```
-
-REQUIREMENTS:
-1. Parse actual data from tool results
-2. Use numbered sections for organization
-3. Do NOT use italic text
-4. Use USD for currency (never use $ symbol)
-5. Show per-stock breakdown within each sector
-6. Rank and recommend based on real metrics
-7. Include reference data section for traceability
 """
 
-# NOTE: In COMBINED_ANALYSIS_PROMPT, variables like {symbol}, {tech_period}, {fund_period}
-# inside the code example must be escaped as {{symbol}}, {{tech_period}}, {{fund_period}}
-# because this string uses .format() for technical_period and fundamental_period.
 COMBINED_ANALYSIS_PROMPT = """Perform complete Technical + Fundamental analysis of {symbol}.
 
 TOOLS TO CALL:
-Technical (all 4 strategies):
 1. bollinger_fibonacci_analysis(symbol="{symbol}", period="{technical_period}")
 2. macd_donchian_analysis(symbol="{symbol}", period="{technical_period}")
 3. connors_zscore_analysis(symbol="{symbol}", period="{technical_period}")
 4. dual_moving_average_analysis(symbol="{symbol}", period="{technical_period}")
-
-Fundamental:
 5. fundamental_analysis_report(symbol="{symbol}", period="{fundamental_period}")
 
-REQUIRED CODE:
 ```python
 import json
 import re
@@ -811,7 +727,7 @@ symbol = "{symbol}"
 tech_period = "{technical_period}"
 fund_period = "{fundamental_period}"
 
-# Get technical analysis from all 4 strategies
+# Get technical analysis
 bb_result = bollinger_fibonacci_analysis(symbol=symbol, period=tech_period)
 macd_result = macd_donchian_analysis(symbol=symbol, period=tech_period)
 connors_result = connors_zscore_analysis(symbol=symbol, period=tech_period)
@@ -820,7 +736,6 @@ dual_ma_result = dual_moving_average_analysis(symbol=symbol, period=tech_period)
 # Get fundamental analysis
 fund_result = fundamental_analysis_report(symbol=symbol, period=fund_period)
 
-# Helper to extract signal
 def get_signal(result):
     if "STRONG BUY" in result.upper():
         return "STRONG BUY"
@@ -832,7 +747,7 @@ def get_signal(result):
         return "SELL"
     return "HOLD"
 
-# Extract signals from each strategy
+# Extract signals
 bb_signal = get_signal(bb_result)
 macd_signal = get_signal(macd_result)
 connors_signal = get_signal(connors_result)
@@ -840,197 +755,91 @@ dual_ma_signal = get_signal(dual_ma_result)
 fund_signal = get_signal(fund_result)
 
 # Count technical signals
-tech_signals = [bb_signal, macd_signal, connors_signal, dual_ma_signal]
-tech_buy = sum(1 for s in tech_signals if "BUY" in s)
-tech_sell = sum(1 for s in tech_signals if "SELL" in s)
-tech_hold = 4 - tech_buy - tech_sell
+tech_buy = sum(1 for s in [bb_signal, macd_signal, connors_signal, dual_ma_signal] if "BUY" in s)
+tech_sell = sum(1 for s in [bb_signal, macd_signal, connors_signal, dual_ma_signal] if "SELL" in s)
 
-# Determine technical outlook
-if tech_buy >= 3:
-    tech_outlook = "BULLISH"
-    tech_confidence = "HIGH"
-elif tech_buy >= 2:
-    tech_outlook = "MODERATELY BULLISH"
-    tech_confidence = "MEDIUM"
-elif tech_sell >= 3:
-    tech_outlook = "BEARISH"
-    tech_confidence = "HIGH"
-elif tech_sell >= 2:
-    tech_outlook = "MODERATELY BEARISH"
-    tech_confidence = "MEDIUM"
-else:
-    tech_outlook = "NEUTRAL"
-    tech_confidence = "LOW"
+# Determine outlooks
+tech_outlook = "BULLISH" if tech_buy >= 3 else "MODERATELY BULLISH" if tech_buy >= 2 else "BEARISH" if tech_sell >= 3 else "NEUTRAL"
+fund_outlook = "POSITIVE" if "BUY" in fund_signal else "NEGATIVE" if "SELL" in fund_signal else "NEUTRAL"
 
-# Determine fundamental outlook
-if "BUY" in fund_signal:
-    fund_outlook = "POSITIVE"
-elif "SELL" in fund_signal:
-    fund_outlook = "NEGATIVE"
-else:
-    fund_outlook = "NEUTRAL"
-
-# Check alignment
+# Determine alignment
 if (tech_buy >= 2 and "BUY" in fund_signal) or (tech_sell >= 2 and "SELL" in fund_signal):
-    alignment = "YES"
-    alignment_desc = "Technical and fundamental views are aligned"
+    alignment = "ALIGNED"
+    align_emoji = "✅"
 elif (tech_buy >= 2 and "SELL" in fund_signal) or (tech_sell >= 2 and "BUY" in fund_signal):
-    alignment = "NO"
-    alignment_desc = "Technical and fundamental views are conflicting"
+    alignment = "DIVERGENT"
+    align_emoji = "❌"
 else:
-    alignment = "PARTIAL"
-    alignment_desc = "Mixed signals between technical and fundamental analysis"
+    alignment = "MIXED"
+    align_emoji = "⚠️"
 
 # Final recommendation
-if alignment == "YES" and tech_buy >= 2:
+if tech_buy >= 3 and "BUY" in fund_signal:
+    final_rec = "STRONG BUY"
+    confidence = "HIGH"
+elif tech_buy >= 2 and "BUY" in fund_signal:
     final_rec = "BUY"
-    final_confidence = "HIGH"
-elif alignment == "YES" and tech_sell >= 2:
+    confidence = "MEDIUM"
+elif tech_sell >= 3 and "SELL" in fund_signal:
+    final_rec = "STRONG SELL"
+    confidence = "HIGH"
+elif tech_sell >= 2 and "SELL" in fund_signal:
     final_rec = "SELL"
-    final_confidence = "HIGH"
-elif tech_buy >= 3:
+    confidence = "MEDIUM"
+elif tech_buy >= 2:
     final_rec = "BUY"
-    final_confidence = "MEDIUM"
-elif tech_sell >= 3:
+    confidence = "LOW"
+elif tech_sell >= 2:
     final_rec = "SELL"
-    final_confidence = "MEDIUM"
+    confidence = "LOW"
 else:
     final_rec = "HOLD"
-    final_confidence = "LOW"
+    confidence = "LOW"
 
-# Build comprehensive report
-report = f'''
-{{symbol}} COMBINED INVESTMENT ANALYSIS REPORT
-Technical Period: {{tech_period}} | Fundamental Period: {{fund_period}}
+# Build report
+report = f"# {{symbol}} Combined Investment Analysis\\n\\n"
+report += "## Executive Summary\\n\\n"
+report += f"**Symbol:** {{symbol}}\\n\\n"
+report += f"**Technical Period:** {{tech_period}}\\n\\n"
+report += f"**Fundamental Period:** {{fund_period}}\\n\\n"
+report += f"**COMBINED RECOMMENDATION:** {{final_rec}}\\n\\n"
+report += f"**Confidence Level:** {{confidence}}\\n\\n"
+report += f"**Technical/Fundamental Alignment:** {{alignment}} {{align_emoji}}\\n\\n"
+report += "---\\n\\n"
 
-================================================================================
-1. INVESTMENT ANALYSIS SUMMARY
-================================================================================
-Symbol: {{symbol}}
-Technical Analysis Period: {{tech_period}}
-Fundamental Analysis Period: {{fund_period}}
-Final Recommendation: {{final_rec}}
-Confidence Level: {{final_confidence}}
+report += "## Technical Analysis Summary\\n\\n"
+report += "### Technical Indicators Table\\n\\n"
+report += "| Strategy | Signal |\\n"
+report += "|----------|--------|\\n"
+report += f"| Bollinger-Fibonacci | {{bb_signal}} |\\n"
+report += f"| MACD-Donchian | {{macd_signal}} |\\n"
+report += f"| Connors RSI-ZScore | {{connors_signal}} |\\n"
+report += f"| Dual Moving Average | {{dual_ma_signal}} |\\n\\n"
+report += f"**Technical Verdict:** {{tech_outlook}} with {{tech_buy}}/4 BUY signals\\n\\n"
+report += "---\\n\\n"
 
-================================================================================
-2. TECHNICAL ANALYSIS RESULTS
-================================================================================
+report += "## Fundamental Analysis Summary\\n\\n"
+report += f"{{fund_result}}\\n\\n"
+report += f"**Fundamental Verdict:** {{fund_outlook}}\\n\\n"
+report += "---\\n\\n"
 
-2.1 Strategy Signals Summary
-| Strategy | Signal |
-|----------|--------|
-| Bollinger-Fibonacci | {{bb_signal}} |
-| MACD-Donchian | {{macd_signal}} |
-| Connors RSI-ZScore | {{connors_signal}} |
-| Dual Moving Average | {{dual_ma_signal}} |
+report += "## Alignment Analysis\\n\\n"
+report += "| Aspect | Technical | Fundamental | Alignment |\\n"
+report += "|--------|-----------|-------------|-----------|\\n"
+report += f"| Overall | {{tech_outlook}} | {{fund_outlook}} | {{align_emoji}} |\\n\\n"
+report += f"**Alignment Status:** {{alignment}}\\n\\n"
+report += "---\\n\\n"
 
-2.2 Technical Consensus
-Signal Count: {{tech_buy}} BUY, {{tech_sell}} SELL, {{tech_hold}} HOLD
-Technical Outlook: {{tech_outlook}}
-Confidence Level: {{tech_confidence}}
-
-2.3 Technical Tool Outputs (Supporting Data)
-
-BOLLINGER-FIBONACCI OUTPUT:
-{{bb_result}}
-
-MACD-DONCHIAN OUTPUT:
-{{macd_result}}
-
-CONNORS RSI-ZSCORE OUTPUT:
-{{connors_result}}
-
-DUAL MOVING AVERAGE OUTPUT:
-{{dual_ma_result}}
-
-================================================================================
-3. FUNDAMENTAL ANALYSIS RESULTS
-================================================================================
-
-3.1 Fundamental Outlook: {{fund_outlook}}
-3.2 Fundamental Signal: {{fund_signal}}
-
-3.3 Fundamental Tool Output (Supporting Data):
-{{fund_result}}
-
-================================================================================
-4. ALIGNMENT ANALYSIS
-================================================================================
-4.1 Technical View: {{tech_outlook}} ({{tech_buy}}/4 strategies bullish)
-4.2 Fundamental View: {{fund_outlook}}
-4.3 Do They Align? {{alignment}}
-4.4 Explanation: {{alignment_desc}}
-
-================================================================================
-5. INVESTMENT THESIS
-================================================================================
-
-5.1 Overall Recommendation: {{final_rec}}
-
-5.2 Confidence Level: {{final_confidence}}
-
-5.3 Supporting Evidence from Technical Analysis:
-- {{tech_buy}} out of 4 technical strategies signal buying opportunity
-- Bollinger-Fibonacci: {{bb_signal}}
-- MACD-Donchian: {{macd_signal}}
-- Connors RSI-ZScore: {{connors_signal}}
-- Dual Moving Average: {{dual_ma_signal}}
-
-5.4 Supporting Evidence from Fundamental Analysis:
-- Fundamental analysis indicates {{fund_outlook}} outlook
-- See Section 3.3 for detailed financial metrics
-
-5.5 Investment Rationale:
-The {{final_rec}} recommendation is based on:
-- Technical consensus: {{tech_outlook}} with {{tech_confidence}} confidence
-- Fundamental outlook: {{fund_outlook}}
-- Alignment status: {{alignment}} - {{alignment_desc}}
-
-================================================================================
-6. RISK ASSESSMENT
-================================================================================
-
-6.1 Technical Risks:
-- {{4 - max(tech_buy, tech_sell)}}/4 strategies show conflicting signals
-- Market conditions may change rapidly
-- Technical indicators are lagging by nature
-
-6.2 Fundamental Risks:
-- Past financial performance does not guarantee future results
-- Market and economic conditions affect fundamentals
-- Industry-specific risks may apply
-
-6.3 Conditions That Would Invalidate This Recommendation:
-- Technical: If {{3 - tech_buy if tech_buy >= 2 else 3 - tech_sell}} more strategies flip to opposite signal
-- Fundamental: Significant change in company financials
-- Market: Major market correction or sector rotation
-
-================================================================================
-7. CONCLUSION
-================================================================================
-Based on comprehensive analysis of both technical indicators and fundamental data,
-the recommendation for {{symbol}} is {{final_rec}} with {{final_confidence}} confidence.
-
-Technical analysis shows {{tech_outlook}} sentiment with {{tech_buy}}/4 bullish signals.
-Fundamental analysis indicates {{fund_outlook}} financial health.
-Views are {{alignment.lower()}} aligned: {{alignment_desc}}
-
-This recommendation should be considered alongside personal risk tolerance and
-investment objectives. Always conduct additional due diligence before investing.
-'''
+report += f"## 🎯 FINAL RECOMMENDATION: **{{final_rec}}**\\n\\n"
+report += "### Why This Recommendation?\\n\\n"
+report += f"**Technical Factors:** {{tech_buy}}/4 strategies show bullish signals\\n\\n"
+report += f"**Fundamental Factors:** Financial analysis shows {{fund_outlook.lower()}} outlook\\n\\n"
+report += f"**Alignment:** Technical and fundamental views are {{alignment.lower()}}\\n\\n"
+report += "---\\n\\n"
+report += "**Disclaimer:** This analysis is for educational purposes only.\\n\\n"
 
 final_answer(report)
 ```
-
-REQUIREMENTS:
-1. Extract actual metrics from all 5 tool results
-2. Include COMPLETE tool outputs as supporting evidence
-3. Use numbered sections for clear organization
-4. Do NOT use italic text (no asterisks)
-5. Use USD for currency values (never use $ symbol)
-6. Explicitly analyze whether technical and fundamental views align
-7. Provide specific, data-backed reasoning for recommendation
-8. Make the report fully traceable - every conclusion must reference data
 """
 
 
@@ -1048,12 +857,10 @@ def run_technical_analysis(
     openai_base_url: Optional[str] = None,
     max_steps: int = DEFAULT_MAX_STEPS,
     executor_type: Literal["local", "e2b", "docker"] = "local",
+    temperature: float = DEFAULT_TEMPERATURE,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> str:
-    """
-    Run technical analysis using 4 individual strategy tools.
-    
-    CodeAgent approach: LLM writes Python code to call and combine all 4 tools.
-    """
+    """Run technical analysis using 4 individual strategy tools."""
     configure_finance_tools()
     
     model = build_model(
@@ -1062,13 +869,14 @@ def run_technical_analysis(
         api_key=openai_api_key,
         hf_token=hf_token,
         api_base=openai_base_url,
+        temperature=temperature,
+        max_tokens=max_tokens,
     )
     
     agent = build_agent(model, LOW_LEVEL_TOOLS, max_steps=max_steps, executor_type=executor_type)
-    
     prompt = TECHNICAL_ANALYSIS_PROMPT.format(symbol=symbol, period=period)
-    
-    return agent.run(prompt)
+    result = agent.run(prompt)
+    return format_agent_result(result)
 
 
 def run_market_scanner(
@@ -1079,14 +887,12 @@ def run_market_scanner(
     openai_api_key: Optional[str] = None,
     hf_token: Optional[str] = None,
     openai_base_url: Optional[str] = None,
-    max_steps: int = 30,  # More steps for loops
+    max_steps: int = 30,
     executor_type: Literal["local", "e2b", "docker"] = "local",
+    temperature: float = DEFAULT_TEMPERATURE,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> str:
-    """
-    Run market scanner using loops over individual strategy tools.
-    
-    CodeAgent approach: LLM writes Python loops to iterate over stocks and strategies.
-    """
+    """Run market scanner using loops over individual strategy tools."""
     configure_finance_tools()
     
     model = build_model(
@@ -1095,20 +901,15 @@ def run_market_scanner(
         api_key=openai_api_key,
         hf_token=hf_token,
         api_base=openai_base_url,
+        temperature=temperature,
+        max_tokens=max_tokens,
     )
     
     agent = build_agent(model, LOW_LEVEL_TOOLS, max_steps=max_steps, executor_type=executor_type)
-    
-    # Parse symbols for the prompt
     symbol_list = [s.strip() for s in symbols.split(",")]
-    
-    prompt = MARKET_SCANNER_PROMPT.format(
-        symbols=symbols,
-        symbol_list=symbol_list,
-        period=period,
-    )
-    
-    return agent.run(prompt)
+    prompt = MARKET_SCANNER_PROMPT.format(symbols=symbols, symbol_list=symbol_list, period=period)
+    result = agent.run(prompt)
+    return format_agent_result(result)
 
 
 def run_fundamental_analysis(
@@ -1121,12 +922,10 @@ def run_fundamental_analysis(
     openai_base_url: Optional[str] = None,
     max_steps: int = DEFAULT_MAX_STEPS,
     executor_type: Literal["local", "e2b", "docker"] = "local",
+    temperature: float = DEFAULT_TEMPERATURE,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> str:
-    """
-    Run fundamental analysis using fundamental_analysis_report tool.
-    
-    CodeAgent approach: Simple single tool call with interpretation.
-    """
+    """Run fundamental analysis using fundamental_analysis_report tool."""
     configure_finance_tools()
     
     model = build_model(
@@ -1135,13 +934,14 @@ def run_fundamental_analysis(
         api_key=openai_api_key,
         hf_token=hf_token,
         api_base=openai_base_url,
+        temperature=temperature,
+        max_tokens=max_tokens,
     )
     
     agent = build_agent(model, LOW_LEVEL_TOOLS, max_steps=max_steps, executor_type=executor_type)
-    
     prompt = FUNDAMENTAL_ANALYSIS_PROMPT.format(symbol=symbol, period=period)
-    
-    return agent.run(prompt)
+    result = agent.run(prompt)
+    return format_agent_result(result)
 
 
 def run_multi_sector_analysis(
@@ -1152,14 +952,12 @@ def run_multi_sector_analysis(
     openai_api_key: Optional[str] = None,
     hf_token: Optional[str] = None,
     openai_base_url: Optional[str] = None,
-    max_steps: int = 50,  # Many steps for nested loops
+    max_steps: int = 50,
     executor_type: Literal["local", "e2b", "docker"] = "local",
+    temperature: float = DEFAULT_TEMPERATURE,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> str:
-    """
-    Run multi-sector analysis using nested loops over tools.
-    
-    CodeAgent approach: LLM writes nested loops (sector -> stock -> strategy).
-    """
+    """Run multi-sector analysis using nested loops over tools."""
     configure_finance_tools()
     
     model = build_model(
@@ -1168,23 +966,15 @@ def run_multi_sector_analysis(
         api_key=openai_api_key,
         hf_token=hf_token,
         api_base=openai_base_url,
+        temperature=temperature,
+        max_tokens=max_tokens,
     )
     
     agent = build_agent(model, LOW_LEVEL_TOOLS, max_steps=max_steps, executor_type=executor_type)
-    
-    # Format for prompt
-    sector_details = "\n".join([
-        f"- {name}: {symbols}"
-        for name, symbols in sectors.items()
-    ])
-    
-    prompt = MULTI_SECTOR_PROMPT.format(
-        sector_details=sector_details,
-        sectors_dict=sectors,
-        period=period,
-    )
-    
-    return agent.run(prompt)
+    sector_details = "\n".join([f"- {name}: {symbols}" for name, symbols in sectors.items()])
+    prompt = MULTI_SECTOR_PROMPT.format(sector_details=sector_details, sectors_dict=sectors, period=period)
+    result = agent.run(prompt)
+    return format_agent_result(result)
 
 
 def run_combined_analysis(
@@ -1198,12 +988,10 @@ def run_combined_analysis(
     openai_base_url: Optional[str] = None,
     max_steps: int = 25,
     executor_type: Literal["local", "e2b", "docker"] = "local",
+    temperature: float = DEFAULT_TEMPERATURE,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> str:
-    """
-    Run combined technical + fundamental analysis.
-    
-    CodeAgent approach: LLM writes code to call all 5 tools and synthesize.
-    """
+    """Run combined technical + fundamental analysis."""
     configure_finance_tools()
     
     model = build_model(
@@ -1212,17 +1000,18 @@ def run_combined_analysis(
         api_key=openai_api_key,
         hf_token=hf_token,
         api_base=openai_base_url,
+        temperature=temperature,
+        max_tokens=max_tokens,
     )
     
     agent = build_agent(model, LOW_LEVEL_TOOLS, max_steps=max_steps, executor_type=executor_type)
-    
     prompt = COMBINED_ANALYSIS_PROMPT.format(
         symbol=symbol,
         technical_period=technical_period,
         fundamental_period=fundamental_period,
     )
-    
-    return agent.run(prompt)
+    result = agent.run(prompt)
+    return format_agent_result(result)
 
 
 # ===========================================================================
@@ -1231,9 +1020,7 @@ def run_combined_analysis(
 
 def main():
     """CLI entry point for CodeAgent analysis."""
-    parser = argparse.ArgumentParser(
-        description="CodeAgent Stock Analysis (LOW-LEVEL tools with Python orchestration)"
-    )
+    parser = argparse.ArgumentParser(description="CodeAgent Stock Analysis")
     parser.add_argument("symbol", help="Stock symbol or comma-separated symbols")
     parser.add_argument("--mode", choices=["technical", "scanner", "fundamental", "combined"],
                         default="technical", help="Analysis mode")
@@ -1243,45 +1030,35 @@ def main():
     parser.add_argument("--max-steps", type=int, default=DEFAULT_MAX_STEPS)
     parser.add_argument("--executor", choices=["local", "e2b", "docker"],
                         default=DEFAULT_EXECUTOR, help="Code executor type")
+    parser.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE,
+                        help="LLM temperature (default: 0.1)")
     
     args = parser.parse_args()
     
     try:
         if args.mode == "technical":
             result = run_technical_analysis(
-                symbol=args.symbol,
-                period=args.period,
-                model_id=args.model_id,
-                model_provider=args.model_provider,
-                max_steps=args.max_steps,
-                executor_type=args.executor,
+                symbol=args.symbol, period=args.period, model_id=args.model_id,
+                model_provider=args.model_provider, max_steps=args.max_steps,
+                executor_type=args.executor, temperature=args.temperature,
             )
         elif args.mode == "scanner":
             result = run_market_scanner(
-                symbols=args.symbol,
-                period=args.period,
-                model_id=args.model_id,
-                model_provider=args.model_provider,
-                max_steps=args.max_steps,
-                executor_type=args.executor,
+                symbols=args.symbol, period=args.period, model_id=args.model_id,
+                model_provider=args.model_provider, max_steps=args.max_steps,
+                executor_type=args.executor, temperature=args.temperature,
             )
         elif args.mode == "fundamental":
             result = run_fundamental_analysis(
-                symbol=args.symbol,
-                period=args.period,
-                model_id=args.model_id,
-                model_provider=args.model_provider,
-                max_steps=args.max_steps,
-                executor_type=args.executor,
+                symbol=args.symbol, period=args.period, model_id=args.model_id,
+                model_provider=args.model_provider, max_steps=args.max_steps,
+                executor_type=args.executor, temperature=args.temperature,
             )
         elif args.mode == "combined":
             result = run_combined_analysis(
-                symbol=args.symbol,
-                technical_period=args.period,
-                model_id=args.model_id,
-                model_provider=args.model_provider,
-                max_steps=args.max_steps,
-                executor_type=args.executor,
+                symbol=args.symbol, technical_period=args.period, model_id=args.model_id,
+                model_provider=args.model_provider, max_steps=args.max_steps,
+                executor_type=args.executor, temperature=args.temperature,
             )
         
         print(result)

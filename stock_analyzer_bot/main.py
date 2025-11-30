@@ -18,8 +18,10 @@ All analysis outputs must be well-documented with:
 from __future__ import annotations
 
 import argparse
+import json
 import os
-from typing import Dict, Optional
+import re
+from typing import Any, Dict, Optional
 
 from smolagents import InferenceClientModel, LiteLLMModel, ToolCallingAgent
 
@@ -48,6 +50,98 @@ __all__ = [
 DEFAULT_MODEL_ID = os.getenv("SMOLAGENT_MODEL_ID", "gpt-4o")
 DEFAULT_MODEL_PROVIDER = os.getenv("SMOLAGENT_MODEL_PROVIDER", "litellm")
 DEFAULT_MAX_STEPS = int(os.getenv("SMOLAGENT_MAX_STEPS", "25"))
+DEFAULT_TEMPERATURE = float(os.getenv("SMOLAGENT_TEMPERATURE", "0.1"))
+DEFAULT_MAX_TOKENS = int(os.getenv("SMOLAGENT_MAX_TOKENS", "8192"))
+
+
+# ===========================================================================
+# Agent Result Formatting Helper
+# ===========================================================================
+
+def format_agent_result(result: Any) -> str:
+    """
+    Format the result from agent.run() into a clean string.
+    
+    The smolagents agent.run() can return different formats:
+    - A string directly
+    - A dict with an "answer" key
+    - A dict serialized as a string
+    - Content with literal '\\n' that need to be converted to newlines
+    - String starting with {"answer": prefix
+    
+    This function normalizes all these cases into a properly formatted string.
+    
+    Args:
+        result: The raw result from agent.run()
+        
+    Returns:
+        A clean, formatted string with proper newlines
+    """
+    if result is None:
+        return "No report generated"
+    
+    # Convert to string first for unified processing
+    if isinstance(result, dict):
+        # Check for common keys that contain the actual answer
+        for key in ["answer", "output", "result", "report", "content"]:
+            if key in result:
+                text = str(result[key])
+                break
+        else:
+            try:
+                text = json.dumps(result, indent=2)
+            except (TypeError, ValueError):
+                text = str(result)
+    else:
+        text = str(result)
+    
+    # Handle JSON string wrapper - check multiple patterns
+    # Pattern 1: {"answer":"content"} or {"answer": "content"}
+    # Pattern 2: String starting with {"answer":
+    
+    # Try to extract content from JSON wrapper
+    json_patterns = [
+        r'^\s*\{\s*"answer"\s*:\s*"(.*)"\s*\}\s*$',  # Full JSON object
+        r'^\s*\{\s*"answer"\s*:\s*"(.*)',  # Partial JSON (truncated end)
+        r'^\s*\{"answer":"(.*)',  # Compact JSON start
+    ]
+    
+    for pattern in json_patterns:
+        match = re.match(pattern, text, re.DOTALL)
+        if match:
+            text = match.group(1)
+            # Remove trailing "} if present from truncated JSON
+            if text.endswith('"}'):
+                text = text[:-2]
+            elif text.endswith('"'):
+                text = text[:-1]
+            break
+    
+    # Also try standard JSON parsing
+    if text.strip().startswith('{'):
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                for key in ["answer", "output", "result", "report", "content"]:
+                    if key in parsed:
+                        text = str(parsed[key])
+                        break
+        except (json.JSONDecodeError, TypeError):
+            pass  # Keep text as-is if JSON parsing fails
+    
+    # Ensure text is a string
+    text = str(text) if not isinstance(text, str) else text
+    
+    # Replace literal escape sequences with actual characters
+    text = text.replace('\\n', '\n')
+    text = text.replace('\\t', '\t')
+    text = text.replace('\\r', '\r')
+    
+    # Clean up any excessive newlines (more than 3 consecutive)
+    while '\n\n\n\n' in text:
+        text = text.replace('\n\n\n\n', '\n\n\n')
+    
+    return text.strip()
 
 
 def build_model(
@@ -56,10 +150,16 @@ def build_model(
     api_key: Optional[str] = None,
     hf_token: Optional[str] = None,
     api_base: Optional[str] = None,
+    temperature: float = DEFAULT_TEMPERATURE,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
 ):
     """Create an LLM model instance for ToolCallingAgent."""
     if provider == "litellm":
-        kwargs = {"model_id": model_id}
+        kwargs = {
+            "model_id": model_id,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
         if api_key:
             kwargs["api_key"] = api_key
         if api_base:
@@ -67,7 +167,12 @@ def build_model(
         return LiteLLMModel(**kwargs)
     else:
         token = hf_token or os.getenv("HF_TOKEN")
-        return InferenceClientModel(model_id=model_id, token=token)
+        return InferenceClientModel(
+            model_id=model_id,
+            token=token,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
 
 
 def build_agent(model, tools: list, max_steps: int = DEFAULT_MAX_STEPS):
@@ -81,7 +186,7 @@ def build_agent(model, tools: list, max_steps: int = DEFAULT_MAX_STEPS):
 
 
 # ===========================================================================
-# Prompts for HIGH-LEVEL Tool Usage
+# Prompts for HIGH-LEVEL Tool Usage - Professional Report Format
 # ===========================================================================
 
 TECHNICAL_ANALYSIS_PROMPT = """You are a senior financial analyst. Analyze {symbol} using technical analysis.
@@ -92,688 +197,497 @@ Call the comprehensive_performance_report tool to get a complete multi-strategy 
 TOOL TO USE:
 - comprehensive_performance_report(symbol="{symbol}", period="{period}")
 
-CRITICAL FORMATTING RULES:
-- NEVER use markdown tables with pipe characters (|) - they break the display
-- NEVER put multiple data points on a single line
-- Put each piece of information on its OWN LINE
-- Use line breaks between sections
-- Use USD for currency (never use the dollar sign)
-- Do NOT use asterisks or italic text
-
-OUTPUT FORMAT - Follow this EXACTLY:
-
-1. EXECUTIVE SUMMARY
-
-Symbol: {symbol}
-Analysis Period: {period}
-Current Price: [value] USD
-Overall Recommendation: [BUY/SELL/HOLD]
-Confidence Level: [HIGH/MEDIUM/LOW]
+After receiving the tool data, create a professional report following this EXACT format:
 
 ---
 
-2. STRATEGY RESULTS
+# {symbol} Technical Analysis Report
 
-2.1 Bollinger Bands and Fibonacci Retracement
+## Executive Summary
 
-Signal: [BUY/SELL/HOLD]
-Strategy Return: [percentage]
-Excess Return vs Buy-Hold: [percentage]
-Sharpe Ratio: [value]
-Max Drawdown: [percentage]
-Win Rate: [percentage]
+Analysis of {symbol} using four technical scoring systems reveals a [BULLISH/BEARISH/NEUTRAL] outlook.
 
-Key Observation: [one sentence about this strategy]
-
-2.2 MACD-Donchian Combined
-
-Signal: [BUY/SELL/HOLD]
-Strategy Return: [percentage]
-Excess Return vs Buy-Hold: [percentage]
-Sharpe Ratio: [value]
-Max Drawdown: [percentage]
-Win Rate: [percentage]
-
-Key Observation: [one sentence about this strategy]
-
-2.3 Connors RSI and Z-Score Combined
-
-Signal: [BUY/SELL/HOLD]
-Strategy Return: [percentage]
-Excess Return vs Buy-Hold: [percentage]
-Sharpe Ratio: [value]
-Max Drawdown: [percentage]
-Win Rate: [percentage]
-
-Key Observation: [one sentence about this strategy]
-
-2.4 Dual Moving Average Crossover
-
-Signal: [BUY/SELL/HOLD]
-Strategy Return: [percentage]
-Excess Return vs Buy-Hold: [percentage]
-Sharpe Ratio: [value]
-Max Drawdown: [percentage]
-Win Rate: [percentage]
-
-Key Observation: [one sentence about this strategy]
+**Analysis Period:** {period}
 
 ---
 
-3. SIGNAL CONSENSUS
+## Technical Indicators Summary Table
 
-Total BUY Signals: [count]
-Total SELL Signals: [count]
-Total HOLD Signals: [count]
-
-Consensus Direction: [BULLISH/BEARISH/NEUTRAL]
-Consensus Strength: [STRONG/MODERATE/WEAK]
-
----
-
-4. PERFORMANCE SUMMARY
-
-Best Performing Strategy: [name]
-- Excess Return: [percentage]
-- Why it outperformed: [brief explanation]
-
-Buy and Hold Return: [percentage]
-
-Strategies that beat Buy-Hold:
-- [list each strategy that outperformed]
+| Indicator System | Score/Value | Signal | Key Findings |
+|-----------------|-------------|---------|--------------|
+| **Bollinger-Fibonacci** | [score] | [BUY/SELL/HOLD] | [one-line finding] |
+| **MACD-Donchian Combined** | [score] | [BUY/SELL/HOLD] | [one-line finding] |
+| **Connors RSI + Z-Score** | [score] | [BUY/SELL/HOLD] | [one-line finding] |
+| **Dual Moving Average** | [score] | [BUY/SELL/HOLD] | [one-line finding] |
 
 ---
 
-5. FINAL RECOMMENDATION
+## Detailed Analysis
 
-Action: [BUY/SELL/HOLD]
-Confidence: [HIGH/MEDIUM/LOW]
+### 1. Bollinger-Fibonacci Strategy
 
-Rationale:
-[2-3 sentences explaining WHY this recommendation based on the data above]
+- **Signal:** [BUY/SELL/HOLD]
+- **Strategy Return:** [X]%
+- **Excess Return vs Buy-Hold:** [X]%
+- **Sharpe Ratio:** [X]
+- **Max Drawdown:** [X]%
 
-Supporting Evidence:
-- [Strategy 1] shows [signal] with [specific metric]
-- [Strategy 2] shows [signal] with [specific metric]
-- [X] out of 4 strategies agree on [direction]
-
----
-
-6. RISK FACTORS
-
-- Strategy disagreement: [X] strategies show conflicting signals
-- [Other specific risks from the analysis]
-- Conditions that would change this recommendation: [list]
+**Key Observation:** [One sentence explanation]
 
 ---
 
-REMEMBER: Each data point on its own line. No tables. No pipe characters. Extract real numbers from the tool.
+### 2. MACD-Donchian Combined Strategy
+
+- **Signal:** [BUY/SELL/HOLD]
+- **Strategy Return:** [X]%
+- **Excess Return vs Buy-Hold:** [X]%
+- **Sharpe Ratio:** [X]
+- **Max Drawdown:** [X]%
+
+**Key Observation:** [One sentence explanation]
+
+---
+
+### 3. Connors RSI + Z-Score Combined Strategy
+
+- **Signal:** [BUY/SELL/HOLD]
+- **Strategy Return:** [X]%
+- **Excess Return vs Buy-Hold:** [X]%
+- **Sharpe Ratio:** [X]
+- **Max Drawdown:** [X]%
+
+**Key Observation:** [One sentence explanation]
+
+---
+
+### 4. Dual Moving Average (50/200 EMA) Strategy
+
+- **Signal:** [BUY/SELL/HOLD]
+- **Strategy Return:** [X]%
+- **Excess Return vs Buy-Hold:** [X]%
+- **Sharpe Ratio:** [X]
+- **Max Drawdown:** [X]%
+
+**Key Observation:** [One sentence explanation]
+
+---
+
+## Consensus Analysis
+
+### Overall Technical Health: **[BULLISH/BEARISH/NEUTRAL]**
+
+| Metric | Status |
+|--------|--------|
+| **Trend Direction** | [Upward/Downward/Sideways] |
+| **Momentum** | [Positive/Negative/Neutral] |
+| **Risk Level** | [Low/Medium/High] |
+
+### Signal Breakdown
+
+- **BUY Signals:** [X]/4
+- **SELL Signals:** [X]/4
+- **HOLD Signals:** [X]/4
+- **Consensus Direction:** [BULLISH/BEARISH/NEUTRAL]
+
+---
+
+## 🎯 FINAL RECOMMENDATION: **[BUY/SELL/HOLD/STRONG BUY/STRONG SELL/AVOID]**
+
+### Action Plan
+
+**For Current {symbol} Holders:**
+- ✅ [Action 1]
+- ✅ [Action 2]
+- ❌ [What NOT to do]
+
+**For Potential Buyers:**
+- [BUY/WAIT/AVOID] at current levels
+- ⏳ Key triggers to watch:
+  - 📊 [Trigger 1]
+  - 📊 [Trigger 2]
+
+---
+
+## Risk Management
+
+- **Position Size:** Maximum [X]% of portfolio
+- **Stop Loss:** [Level based on technical support]
+- **Take Profit Target:** [Level based on technical resistance]
+
+---
+
+## Conclusion
+
+[2-3 sentence summary connecting all the data points to the final recommendation. Be specific about WHY you're recommending this action based on the technical indicators.]
+
+**Disclaimer:** This analysis is for educational purposes only. Always conduct your own research before investing.
+
+---
+
+IMPORTANT INSTRUCTIONS:
+1. Extract REAL numbers from the tool output - do not make up values
+2. The table format with | is REQUIRED for the summary
+3. Use emojis (✅, ❌, ⏳, 📊, 🎯) to make the report scannable
+4. Be specific and data-driven in your observations
+5. Use USD for currency (never use the dollar sign symbol)
 """
 
-MARKET_SCANNER_PROMPT = """You are a senior portfolio analyst. Scan these stocks: {symbols}
+MARKET_SCANNER_PROMPT = """You are a senior financial analyst. Scan and rank these stocks: {symbols}
 
 YOUR TASK:
-Call the unified_market_scanner tool to analyze ALL stocks at once.
+Call unified_market_scanner to analyze all stocks at once.
 
 TOOL TO USE:
 - unified_market_scanner(symbols="{symbols}", period="{period}", output_format="detailed")
 
-CRITICAL FORMATTING RULES:
-- NEVER use markdown tables with pipe characters (|) - they break the display
-- NEVER put multiple data points on a single line
-- Put each piece of information on its OWN LINE
-- Use line breaks between sections
-- Use USD for currency (never use the dollar sign)
-- Do NOT use asterisks or italic text
-
-OUTPUT FORMAT - Follow this EXACTLY:
-
-1. MARKET SCANNER OVERVIEW
-
-Stocks Analyzed: {symbols}
-Analysis Period: {period}
-Scanner Date: [date]
+After receiving the tool data, create a professional report following this format:
 
 ---
 
-2. STOCK RANKINGS
+# Market Scanner Report
 
-(List stocks from best to worst opportunity)
+## Executive Summary
 
-Rank 1: [SYMBOL]
-- Buy Signals: [X]/5 strategies
-- Overall Score: [value]
-- Recommendation: [BUY/HOLD/AVOID]
+Scanned {symbol_count} stocks using four technical strategies.
 
-Rank 2: [SYMBOL]
-- Buy Signals: [X]/5 strategies
-- Overall Score: [value]
-- Recommendation: [BUY/HOLD/AVOID]
+**Stocks Analyzed:** {symbols}
 
-Rank 3: [SYMBOL]
-- Buy Signals: [X]/5 strategies
-- Overall Score: [value]
-- Recommendation: [BUY/HOLD/AVOID]
-
-(continue for all stocks)
+**Analysis Period:** {period}
 
 ---
 
-3. INDIVIDUAL STOCK DETAILS
+## Stock Rankings Summary Table
 
-3.1 [FIRST SYMBOL]
-
-Current Price: [value] USD
-Buy and Hold Return: [percentage]
-
-Strategy Signals:
-
-Bollinger Z-Score:
-- Signal: [BUY/SELL/NEUTRAL]
-- Score: [value]
-- Excess Return: [percentage]
-
-Bollinger-Fibonacci:
-- Signal: [BUY/SELL/NEUTRAL]
-- Score: [value]
-- Excess Return: [percentage]
-
-MACD-Donchian:
-- Signal: [BUY/SELL/NEUTRAL]
-- Score: [value]
-- Excess Return: [percentage]
-
-Connors RSI-ZScore:
-- Signal: [BUY/SELL/NEUTRAL]
-- Score: [value]
-- Excess Return: [percentage]
-
-Dual Moving Average:
-- Signal: [BUY/SELL/NEUTRAL]
-- Score: [value]
-- Excess Return: [percentage]
-
-Consensus: [X] BUY, [Y] SELL, [Z] NEUTRAL
-Best Strategy: [name] with [percentage] excess return
+| Rank | Symbol | BUY Signals | Overall Signal | Recommendation |
+|------|--------|-------------|----------------|----------------|
+| 1 | [SYMBOL] | [X]/4 | [BULLISH/BEARISH/NEUTRAL] | [STRONG BUY/BUY/HOLD/SELL/AVOID] |
+| 2 | [SYMBOL] | [X]/4 | [BULLISH/BEARISH/NEUTRAL] | [STRONG BUY/BUY/HOLD/SELL/AVOID] |
+| ... | ... | ... | ... | ... |
 
 ---
 
-3.2 [SECOND SYMBOL]
+## Detailed Stock Analysis
 
-(repeat same format for each stock)
+### 🥇 Rank 1: [SYMBOL]
 
----
+**Signal Breakdown:**
 
-4. STRATEGY PERFORMANCE SUMMARY
+| Strategy | Signal | Return vs B&H |
+|----------|--------|---------------|
+| Bollinger-Fibonacci | [SIGNAL] | [X]% |
+| MACD-Donchian | [SIGNAL] | [X]% |
+| Connors RSI-ZScore | [SIGNAL] | [X]% |
+| Dual Moving Average | [SIGNAL] | [X]% |
 
-Best Overall Strategy: [name]
-- Average Excess Return: [percentage]
-- Stocks where it outperformed: [list]
-
-Worst Overall Strategy: [name]
-- Average Excess Return: [percentage]
-
-Strategy Agreement: [High/Medium/Low] - [brief explanation]
+**Verdict:** [1-2 sentence summary]
 
 ---
 
-5. RECOMMENDATIONS
-
-Top Picks:
-- [SYMBOL 1]: [reason based on data]
-- [SYMBOL 2]: [reason based on data]
-
-Stocks to Avoid:
-- [SYMBOL]: [reason based on data]
+[Repeat for each stock...]
 
 ---
 
-6. MARKET ASSESSMENT
+## 🎯 TOP PICKS
 
-Overall Sentiment: [BULLISH/BEARISH/NEUTRAL]
-Total BUY signals: [count] across all stocks
-Total SELL signals: [count] across all stocks
+### Best Opportunities (3+ BUY signals):
+1. **[SYMBOL]** - [X]/4 BUY signals - [Brief reason]
+2. **[SYMBOL]** - [X]/4 BUY signals - [Brief reason]
 
-Key Observation: [main takeaway]
+### Stocks to Avoid (0-1 BUY signals):
+1. **[SYMBOL]** - [X]/4 BUY signals - [Brief reason]
 
 ---
 
-REMEMBER: Each data point on its own line. No tables. No pipe characters. Extract real numbers from the tool.
+## Market Sentiment
+
+- **Average BUY Signals:** [X.X]/4 across all stocks
+- **Market Outlook:** [BULLISH/BEARISH/NEUTRAL]
+- **Recommendation:** [Summary action]
+
+---
+
+IMPORTANT: Extract REAL data from the tool output. Use tables for clarity.
 """
 
-FUNDAMENTAL_ANALYSIS_PROMPT = """You are a senior fundamental analyst. Analyze {symbol}'s financials.
+FUNDAMENTAL_ANALYSIS_PROMPT = """You are a senior financial analyst. Analyze {symbol} fundamentals.
 
 YOUR TASK:
-Call the fundamental_analysis_report tool to get complete financial analysis.
+Call fundamental_analysis_report to get complete financial statement analysis.
 
 TOOL TO USE:
 - fundamental_analysis_report(symbol="{symbol}", period="{period}")
 
-CRITICAL FORMATTING RULES:
-- NEVER use markdown tables with pipe characters (|) - they break the display
-- NEVER put multiple data points on a single line
-- Put each piece of information on its OWN LINE
-- Use line breaks between sections
-- Use USD for currency (never use the dollar sign)
-- Do NOT use asterisks or italic text
-
-OUTPUT FORMAT - Follow this EXACTLY:
-
-1. COMPANY OVERVIEW
-
-Symbol: {symbol}
-Analysis Period: {period}
+After receiving the tool data, create a professional report following this format:
 
 ---
 
-2. INCOME STATEMENT ANALYSIS
+# {symbol} Fundamental Analysis Report
 
-Revenue:
-- Total Revenue: [value] USD
-- Revenue Growth: [percentage]
-- Trend: [increasing/decreasing/stable]
+## Executive Summary
 
-Profitability:
-- Net Income: [value] USD
-- Gross Margin: [percentage]
-- Operating Margin: [percentage]
-- Net Margin: [percentage]
+**Company:** {symbol}
 
----
+**Analysis Period:** {period}
 
-3. BALANCE SHEET ANALYSIS
+**Financial Health:** [STRONG/MODERATE/WEAK]
 
-Assets:
-- Total Assets: [value] USD
-- Cash and Equivalents: [value] USD
-
-Liabilities and Equity:
-- Total Debt: [value] USD
-- Shareholders Equity: [value] USD
-- Debt-to-Equity Ratio: [value]
+**Investment Grade:** [A/B/C/D/F]
 
 ---
 
-4. CASH FLOW ANALYSIS
+## Key Metrics Summary Table
 
-Operating Cash Flow: [value] USD
-Free Cash Flow: [value] USD
-Cash Flow Trend: [positive/negative/stable]
-
----
-
-5. KEY FINANCIAL RATIOS
-
-ROE (Return on Equity):
-- Value: [percentage]
-- Assessment: [Good/Fair/Poor]
-- Interpretation: [one sentence]
-
-ROA (Return on Assets):
-- Value: [percentage]
-- Assessment: [Good/Fair/Poor]
-- Interpretation: [one sentence]
-
-Current Ratio:
-- Value: [number]
-- Assessment: [Good/Fair/Poor]
-- Interpretation: [one sentence]
-
-Quick Ratio:
-- Value: [number]
-- Assessment: [Good/Fair/Poor]
-- Interpretation: [one sentence]
-
-P/E Ratio:
-- Value: [number]
-- Assessment: [Good/Fair/Poor]
-- Interpretation: [one sentence]
+| Category | Metric | Value | Assessment |
+|----------|--------|-------|------------|
+| **Profitability** | ROE | [X]% | [Good/Fair/Poor] |
+| **Profitability** | Net Margin | [X]% | [Good/Fair/Poor] |
+| **Leverage** | Debt/Equity | [X] | [Good/Fair/Poor] |
+| **Liquidity** | Current Ratio | [X] | [Good/Fair/Poor] |
+| **Valuation** | P/E Ratio | [X] | [Good/Fair/Poor] |
+| **Growth** | Revenue Growth | [X]% | [Good/Fair/Poor] |
 
 ---
 
-6. FINANCIAL HEALTH ASSESSMENT
+## Financial Statements Analysis
 
-Overall Health: [STRONG/MODERATE/WEAK]
+### Income Statement Highlights
 
-Strengths:
-- [Strength 1 based on data above]
-- [Strength 2 based on data above]
+- **Revenue:** [X] USD
+- **Net Income:** [X] USD
+- **Gross Margin:** [X]%
+- **Operating Margin:** [X]%
 
-Weaknesses:
-- [Weakness 1 based on data above]
-- [Weakness 2 based on data above]
+### Balance Sheet Highlights
 
----
+- **Total Assets:** [X] USD
+- **Total Debt:** [X] USD
+- **Shareholders Equity:** [X] USD
 
-7. INVESTMENT RECOMMENDATION
+### Cash Flow Highlights
 
-Action: [BUY/SELL/HOLD]
-Confidence: [HIGH/MEDIUM/LOW]
-
-Rationale:
-[2-3 sentences explaining the recommendation based on the financial data]
-
-Key Supporting Metrics:
-- [Metric 1]: [Value] - supports recommendation because [reason]
-- [Metric 2]: [Value] - supports recommendation because [reason]
+- **Operating Cash Flow:** [X] USD
+- **Free Cash Flow:** [X] USD
+- **CapEx:** [X] USD
 
 ---
 
-8. RISK FACTORS
+## Strengths and Weaknesses
 
-- [Financial risk 1]
-- [Financial risk 2]
+### ✅ Strengths
+1. [Strength 1 with data]
+2. [Strength 2 with data]
 
-Conditions to Monitor:
-- [what would change the outlook]
+### ❌ Weaknesses
+1. [Weakness 1 with data]
+2. [Weakness 2 with data]
 
 ---
 
-REMEMBER: Each data point on its own line. No tables. No pipe characters. Extract real numbers from the tool.
+## 🎯 RECOMMENDATION: **[BUY/SELL/HOLD]**
+
+**Rationale:** [2-3 sentences explaining why based on the fundamentals]
+
+---
+
+IMPORTANT: Extract REAL numbers from the tool output. Use USD for currency.
 """
 
-MULTI_SECTOR_PROMPT = """You are a senior portfolio strategist. Analyze these sectors:
+MULTI_SECTOR_PROMPT = """You are a senior financial analyst. Compare these sectors:
 
 {sector_details}
 
-YOUR TASK:
-For EACH sector, call unified_market_scanner to analyze all stocks in that sector.
-Then synthesize cross-sector insights.
-
-TOOLS TO USE:
-For each sector, call:
-- unified_market_scanner(symbols="<sector_symbols>", period="{period}", output_format="detailed")
-
-CRITICAL FORMATTING RULES:
-- NEVER use markdown tables with pipe characters (|) - they break the display
-- NEVER put multiple data points on a single line
-- Put each piece of information on its OWN LINE
-- Use line breaks between sections
-- Use USD for currency (never use the dollar sign)
-- Do NOT use asterisks or italic text
-
-OUTPUT FORMAT - Follow this EXACTLY:
-
-1. MULTI-SECTOR ANALYSIS OVERVIEW
-
-Sectors Analyzed: [list]
-Total Stocks: [count]
 Analysis Period: {period}
 
----
+YOUR TASK:
+For each sector, call unified_market_scanner to analyze the stocks.
 
-2. SECTOR RESULTS
+TOOL TO USE:
+- unified_market_scanner(symbols="[stocks]", period="{period}", output_format="detailed")
 
-2.1 [SECTOR NAME 1]
-
-Stocks Analyzed: [list]
-Best Performer: [Symbol]
-Best Performer Return: [percentage]
-Sector Outlook: [BULLISH/BEARISH/NEUTRAL]
-Average Buy Signals: [X]/5 strategies
-
-Top Stock Details:
-- Symbol: [best stock]
-- Buy Signals: [count]/5
-- Reason: [why it's the top pick]
+After receiving ALL sector data, create a professional report following this format:
 
 ---
 
-2.2 [SECTOR NAME 2]
+# Multi-Sector Analysis Report
 
-(repeat same format)
+## Executive Summary
 
----
+**Sectors Analyzed:** [List sectors]
 
-(continue for all sectors)
+**Analysis Period:** {period}
 
----
+**Strongest Sector:** [Name]
 
-3. SECTOR RANKINGS
-
-Rank 1: [SECTOR NAME]
-- Average Score: [value]
-- Best Stock: [symbol]
-- Outlook: [BULLISH/BEARISH/NEUTRAL]
-
-Rank 2: [SECTOR NAME]
-- Average Score: [value]
-- Best Stock: [symbol]
-- Outlook: [BULLISH/BEARISH/NEUTRAL]
-
-(continue for all sectors)
+**Weakest Sector:** [Name]
 
 ---
 
-4. TOP PICKS ACROSS ALL SECTORS
+## Sector Rankings Summary Table
 
-Pick 1: [SYMBOL] from [SECTOR]
-- Buy Signals: [X]/5 strategies
-- Best Strategy: [name]
-- Best Strategy Return: [percentage]
-- Why Selected: [specific reasoning]
-
-Pick 2: [SYMBOL] from [SECTOR]
-- Buy Signals: [X]/5 strategies
-- Best Strategy: [name]
-- Best Strategy Return: [percentage]
-- Why Selected: [specific reasoning]
-
-Pick 3: [SYMBOL] from [SECTOR]
-- Buy Signals: [X]/5 strategies
-- Best Strategy: [name]
-- Best Strategy Return: [percentage]
-- Why Selected: [specific reasoning]
+| Rank | Sector | Avg BUY Signals | Best Stock | Sector Outlook |
+|------|--------|-----------------|------------|----------------|
+| 1 | [Sector] | [X.X]/4 | [SYMBOL] | [BULLISH/NEUTRAL/BEARISH] |
+| 2 | [Sector] | [X.X]/4 | [SYMBOL] | [BULLISH/NEUTRAL/BEARISH] |
+| ... | ... | ... | ... | ... |
 
 ---
 
-5. PORTFOLIO ALLOCATION BY SECTOR
+## Sector-by-Sector Analysis
 
-[Sector 1]: [X]%
-- Reason: [based on data]
+### 🥇 Rank 1: [SECTOR NAME]
 
-[Sector 2]: [X]%
-- Reason: [based on data]
+**Stocks Analyzed:** [List]
 
-[Sector 3]: [X]%
-- Reason: [based on data]
+**Average BUY Signals:** [X.X]/4
 
----
+| Stock | BUY Signals | Recommendation |
+|-------|-------------|----------------|
+| [SYM] | [X]/4 | [REC] |
+| [SYM] | [X]/4 | [REC] |
 
-6. OVERALL MARKET ASSESSMENT
-
-Strongest Sector: [NAME]
-- Why: [data points]
-
-Weakest Sector: [NAME]
-- Why: [data points]
-
-Market Sentiment: [BULLISH/BEARISH/NEUTRAL]
+**Sector Verdict:** [1-2 sentences]
 
 ---
 
-7. STRATEGIC RECOMMENDATIONS
-
-Primary Recommendation:
-[Clear action with supporting data]
-
-Risk Factors:
-- [key risk 1]
-- [key risk 2]
-
-Alternative Approach:
-[For different risk tolerance]
+[Repeat for each sector...]
 
 ---
 
-REMEMBER: Each data point on its own line. No tables. No pipe characters. Extract real numbers from the tools.
+## 🎯 TOP PICKS ACROSS ALL SECTORS
+
+1. **[SYMBOL]** ([Sector]) - [X]/4 BUY signals
+2. **[SYMBOL]** ([Sector]) - [X]/4 BUY signals
+3. **[SYMBOL]** ([Sector]) - [X]/4 BUY signals
+
+---
+
+## Investment Strategy
+
+**Recommended Sector Allocation:**
+- [Sector 1]: [X]% - [Reason]
+- [Sector 2]: [X]% - [Reason]
+
+---
+
+IMPORTANT: Extract REAL data from tool outputs. Use tables for clarity.
 """
 
 COMBINED_ANALYSIS_PROMPT = """You are a senior investment analyst. Perform complete analysis of {symbol}.
 
 YOUR TASK:
-Combine BOTH technical and fundamental analysis:
-1. Call comprehensive_performance_report for technical analysis
-2. Call fundamental_analysis_report for fundamental analysis
+Combine BOTH technical and fundamental analysis.
 
 TOOLS TO USE:
-- comprehensive_performance_report(symbol="{symbol}", period="{technical_period}")
-- fundamental_analysis_report(symbol="{symbol}", period="{fundamental_period}")
+1. comprehensive_performance_report(symbol="{symbol}", period="{technical_period}") - for technicals
+2. fundamental_analysis_report(symbol="{symbol}", period="{fundamental_period}") - for fundamentals
 
-CRITICAL FORMATTING RULES:
-- NEVER use markdown tables with pipe characters (|) - they break the display
-- NEVER put multiple data points on a single line
-- Put each piece of information on its OWN LINE
-- Use line breaks between sections
-- Use USD for currency (never use the dollar sign)
-- Do NOT use asterisks or italic text
-
-OUTPUT FORMAT - Follow this EXACTLY:
-
-1. INVESTMENT ANALYSIS SUMMARY
-
-Symbol: {symbol}
-Technical Period: {technical_period}
-Fundamental Period: {fundamental_period}
-Final Recommendation: [BUY/SELL/HOLD]
-Confidence Level: [HIGH/MEDIUM/LOW]
+After receiving BOTH tool outputs, create a professional report following this format:
 
 ---
 
-2. TECHNICAL ANALYSIS RESULTS
+# {symbol} Combined Investment Analysis
 
-2.1 Strategy Signals
+## Executive Summary
 
-Bollinger-Fibonacci Strategy:
-- Signal: [BUY/SELL/HOLD]
-- Return vs Buy-Hold: [percentage]
-- Sharpe Ratio: [value]
-- Max Drawdown: [percentage]
+**Symbol:** {symbol}
 
-MACD-Donchian Strategy:
-- Signal: [BUY/SELL/HOLD]
-- Return vs Buy-Hold: [percentage]
-- Sharpe Ratio: [value]
-- Max Drawdown: [percentage]
+**Technical Period:** {technical_period}
 
-Connors RSI-ZScore Strategy:
-- Signal: [BUY/SELL/HOLD]
-- Return vs Buy-Hold: [percentage]
-- Sharpe Ratio: [value]
-- Max Drawdown: [percentage]
+**Fundamental Period:** {fundamental_period}
 
-Dual Moving Average Strategy:
-- Signal: [BUY/SELL/HOLD]
-- Return vs Buy-Hold: [percentage]
-- Sharpe Ratio: [value]
-- Max Drawdown: [percentage]
+**COMBINED RECOMMENDATION:** [STRONG BUY/BUY/HOLD/SELL/STRONG SELL]
 
-2.2 Technical Consensus
+**Confidence Level:** [HIGH/MEDIUM/LOW]
 
-Signal Count: [X] BUY, [Y] SELL, [Z] HOLD
-Technical Outlook: [BULLISH/BEARISH/NEUTRAL]
-Confidence Level: [HIGH/MEDIUM/LOW]
-
-2.3 Best Performing Strategy
-
-Strategy Name: [name]
-Excess Return: [percentage]
-Reason: [brief explanation]
+**Technical/Fundamental Alignment:** [ALIGNED/DIVERGENT/MIXED]
 
 ---
 
-3. FUNDAMENTAL ANALYSIS RESULTS
+## Technical Analysis Summary
 
-3.1 Financial Health Snapshot
+### Technical Indicators Table
 
-Revenue: [value] USD
-Net Income: [value] USD
-Free Cash Flow: [value] USD
+| Strategy | Signal | Return vs B&H | Sharpe Ratio |
+|----------|--------|---------------|--------------|
+| Bollinger-Fibonacci | [SIGNAL] | [X]% | [X] |
+| MACD-Donchian | [SIGNAL] | [X]% | [X] |
+| Connors RSI-ZScore | [SIGNAL] | [X]% | [X] |
+| Dual Moving Average | [SIGNAL] | [X]% | [X] |
 
-3.2 Key Financial Ratios
-
-ROE (Return on Equity):
-- Value: [percentage]
-- Assessment: [Good/Fair/Poor]
-
-Debt-to-Equity:
-- Value: [number]
-- Assessment: [Good/Fair/Poor]
-
-Current Ratio:
-- Value: [number]
-- Assessment: [Good/Fair/Poor]
-
-P/E Ratio:
-- Value: [number]
-- Assessment: [Good/Fair/Poor]
-
-3.3 Fundamental Outlook
-
-Financial Health: [STRONG/MODERATE/WEAK]
-Growth Trend: [POSITIVE/NEGATIVE/STABLE]
+**Technical Verdict:** [BULLISH/BEARISH/NEUTRAL] with [X]/4 BUY signals
 
 ---
 
-4. ALIGNMENT ANALYSIS
+## Fundamental Analysis Summary
 
-4.1 Technical View Summary:
-[2-3 sentences summarizing technical outlook]
+### Key Metrics Table
 
-4.2 Fundamental View Summary:
-[2-3 sentences summarizing fundamental outlook]
+| Metric | Value | Assessment |
+|--------|-------|------------|
+| ROE | [X]% | [Good/Fair/Poor] |
+| Debt/Equity | [X] | [Good/Fair/Poor] |
+| Current Ratio | [X] | [Good/Fair/Poor] |
+| P/E Ratio | [X] | [Good/Fair/Poor] |
 
-4.3 Agreement Assessment:
-Do They Align: [YES/NO/PARTIAL]
-Explanation: [why they agree or disagree]
-
----
-
-5. INVESTMENT THESIS
-
-5.1 Overall Recommendation: [BUY/SELL/HOLD]
-
-5.2 Confidence Level: [HIGH/MEDIUM/LOW]
-
-5.3 Supporting Evidence from Technical Analysis:
-- [specific metric and what it indicates]
-- [specific metric and what it indicates]
-
-5.4 Supporting Evidence from Fundamental Analysis:
-- [specific metric and what it indicates]
-- [specific metric and what it indicates]
-
-5.5 Entry Strategy:
-[When and how to enter if recommending BUY]
-
-5.6 Exit Considerations:
-[When to exit or reconsider the position]
+**Fundamental Verdict:** [STRONG/MODERATE/WEAK] financial health
 
 ---
 
-6. RISK ASSESSMENT
+## Alignment Analysis
 
-Technical Risks:
-- [risk 1]
-- [risk 2]
+| Aspect | Technical View | Fundamental View | Alignment |
+|--------|----------------|------------------|-----------|
+| Overall | [BULLISH/BEARISH/NEUTRAL] | [POSITIVE/NEGATIVE/NEUTRAL] | [✅/❌] |
+| Momentum | [Status] | [Growth trend] | [✅/❌] |
+| Risk | [Level] | [Financial stability] | [✅/❌] |
 
-Fundamental Risks:
-- [risk 1]
-- [risk 2]
-
-Conditions That Would Invalidate This Recommendation:
-- [condition 1]
-- [condition 2]
+**Alignment Status:** [ALIGNED/DIVERGENT/MIXED]
 
 ---
 
-7. CONCLUSION
+## 🎯 FINAL RECOMMENDATION: **[RECOMMENDATION]**
 
-[2-3 sentence final summary with clear action recommendation]
+### Why This Recommendation?
+
+**Technical Factors:**
+- [Factor 1 with data]
+- [Factor 2 with data]
+
+**Fundamental Factors:**
+- [Factor 1 with data]
+- [Factor 2 with data]
+
+### Action Plan
+
+**For Current Holders:**
+- ✅ [Action 1]
+- ✅ [Action 2]
+
+**For Potential Buyers:**
+- [Action with conditions]
+
+### Risk Management
+
+- **Position Size:** Max [X]% of portfolio
+- **Stop Loss:** Based on [technical level]
+- **Time Horizon:** [Short/Medium/Long] term
 
 ---
 
-REMEMBER: Each data point on its own line. No tables. No pipe characters. Extract real numbers from the tools.
+## Conclusion
+
+[3-4 sentences connecting both technical and fundamental analysis to justify the final recommendation. Be specific about the alignment or divergence between the two analyses.]
+
+**Disclaimer:** This analysis is for educational purposes only.
+
+---
+
+IMPORTANT: 
+1. Extract REAL data from BOTH tool outputs
+2. Use tables for clarity and scannability
+3. Use emojis (✅, ❌, 🎯) to highlight key points
+4. Explicitly address whether technical and fundamental views ALIGN or DIVERGE
+5. Use USD for currency values
 """
 
 
@@ -790,11 +704,13 @@ def run_technical_analysis(
     hf_token: Optional[str] = None,
     openai_base_url: Optional[str] = None,
     max_steps: int = DEFAULT_MAX_STEPS,
+    temperature: float = DEFAULT_TEMPERATURE,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> str:
     """
     Run technical analysis using comprehensive_performance_report (1 MCP call).
     
-    ToolCallingAgent approach: Use high-level tool that does everything.
+    ToolCallingAgent approach: One tool call gets all 4 strategies analyzed.
     """
     configure_finance_tools()
     
@@ -804,13 +720,16 @@ def run_technical_analysis(
         api_key=openai_api_key,
         hf_token=hf_token,
         api_base=openai_base_url,
+        temperature=temperature,
+        max_tokens=max_tokens,
     )
     
     agent = build_agent(model, HIGH_LEVEL_TOOLS, max_steps=max_steps)
     
     prompt = TECHNICAL_ANALYSIS_PROMPT.format(symbol=symbol, period=period)
     
-    return agent.run(prompt)
+    result = agent.run(prompt)
+    return format_agent_result(result)
 
 
 def run_market_scanner(
@@ -822,11 +741,13 @@ def run_market_scanner(
     hf_token: Optional[str] = None,
     openai_base_url: Optional[str] = None,
     max_steps: int = DEFAULT_MAX_STEPS,
+    temperature: float = DEFAULT_TEMPERATURE,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> str:
     """
     Run market scanner using unified_market_scanner (1 MCP call).
     
-    ToolCallingAgent approach: One tool call scans all stocks at once.
+    ToolCallingAgent approach: One tool call analyzes all stocks at once.
     """
     configure_finance_tools()
     
@@ -836,13 +757,22 @@ def run_market_scanner(
         api_key=openai_api_key,
         hf_token=hf_token,
         api_base=openai_base_url,
+        temperature=temperature,
+        max_tokens=max_tokens,
     )
     
     agent = build_agent(model, HIGH_LEVEL_TOOLS, max_steps=max_steps)
     
-    prompt = MARKET_SCANNER_PROMPT.format(symbols=symbols, period=period)
+    symbol_list = [s.strip() for s in symbols.split(",")]
     
-    return agent.run(prompt)
+    prompt = MARKET_SCANNER_PROMPT.format(
+        symbols=symbols,
+        symbol_count=len(symbol_list),
+        period=period,
+    )
+    
+    result = agent.run(prompt)
+    return format_agent_result(result)
 
 
 def run_fundamental_analysis(
@@ -854,11 +784,13 @@ def run_fundamental_analysis(
     hf_token: Optional[str] = None,
     openai_base_url: Optional[str] = None,
     max_steps: int = DEFAULT_MAX_STEPS,
+    temperature: float = DEFAULT_TEMPERATURE,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> str:
     """
     Run fundamental analysis using fundamental_analysis_report (1 MCP call).
     
-    ToolCallingAgent approach: One tool call gets all financials.
+    ToolCallingAgent approach: One tool call gets complete financial analysis.
     """
     configure_finance_tools()
     
@@ -868,13 +800,16 @@ def run_fundamental_analysis(
         api_key=openai_api_key,
         hf_token=hf_token,
         api_base=openai_base_url,
+        temperature=temperature,
+        max_tokens=max_tokens,
     )
     
     agent = build_agent(model, HIGH_LEVEL_TOOLS, max_steps=max_steps)
     
     prompt = FUNDAMENTAL_ANALYSIS_PROMPT.format(symbol=symbol, period=period)
     
-    return agent.run(prompt)
+    result = agent.run(prompt)
+    return format_agent_result(result)
 
 
 def run_multi_sector_analysis(
@@ -885,10 +820,12 @@ def run_multi_sector_analysis(
     openai_api_key: Optional[str] = None,
     hf_token: Optional[str] = None,
     openai_base_url: Optional[str] = None,
-    max_steps: int = 30,  # More steps for multiple sectors
+    max_steps: int = 40,
+    temperature: float = DEFAULT_TEMPERATURE,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> str:
     """
-    Run multi-sector analysis using unified_market_scanner per sector.
+    Run multi-sector analysis (N MCP calls, one per sector).
     
     ToolCallingAgent approach: One scanner call per sector (N calls total).
     """
@@ -900,11 +837,12 @@ def run_multi_sector_analysis(
         api_key=openai_api_key,
         hf_token=hf_token,
         api_base=openai_base_url,
+        temperature=temperature,
+        max_tokens=max_tokens,
     )
     
     agent = build_agent(model, HIGH_LEVEL_TOOLS, max_steps=max_steps)
     
-    # Format sector details for prompt
     sector_details = "\n".join([
         f"- {name}: {symbols}"
         for name, symbols in sectors.items()
@@ -915,7 +853,8 @@ def run_multi_sector_analysis(
         period=period,
     )
     
-    return agent.run(prompt)
+    result = agent.run(prompt)
+    return format_agent_result(result)
 
 
 def run_combined_analysis(
@@ -928,6 +867,8 @@ def run_combined_analysis(
     hf_token: Optional[str] = None,
     openai_base_url: Optional[str] = None,
     max_steps: int = DEFAULT_MAX_STEPS,
+    temperature: float = DEFAULT_TEMPERATURE,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> str:
     """
     Run combined technical + fundamental analysis (2 MCP calls).
@@ -944,6 +885,8 @@ def run_combined_analysis(
         api_key=openai_api_key,
         hf_token=hf_token,
         api_base=openai_base_url,
+        temperature=temperature,
+        max_tokens=max_tokens,
     )
     
     agent = build_agent(model, HIGH_LEVEL_TOOLS, max_steps=max_steps)
@@ -954,7 +897,8 @@ def run_combined_analysis(
         fundamental_period=fundamental_period,
     )
     
-    return agent.run(prompt)
+    result = agent.run(prompt)
+    return format_agent_result(result)
 
 
 # ===========================================================================
@@ -973,6 +917,8 @@ def main():
     parser.add_argument("--model-id", default=DEFAULT_MODEL_ID)
     parser.add_argument("--model-provider", default=DEFAULT_MODEL_PROVIDER)
     parser.add_argument("--max-steps", type=int, default=DEFAULT_MAX_STEPS)
+    parser.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE,
+                        help="LLM temperature (default: 0.1)")
     
     args = parser.parse_args()
     
@@ -984,6 +930,7 @@ def main():
                 model_id=args.model_id,
                 model_provider=args.model_provider,
                 max_steps=args.max_steps,
+                temperature=args.temperature,
             )
         elif args.mode == "scanner":
             result = run_market_scanner(
@@ -992,6 +939,7 @@ def main():
                 model_id=args.model_id,
                 model_provider=args.model_provider,
                 max_steps=args.max_steps,
+                temperature=args.temperature,
             )
         elif args.mode == "fundamental":
             result = run_fundamental_analysis(
@@ -1000,6 +948,7 @@ def main():
                 model_id=args.model_id,
                 model_provider=args.model_provider,
                 max_steps=args.max_steps,
+                temperature=args.temperature,
             )
         elif args.mode == "combined":
             result = run_combined_analysis(
@@ -1008,6 +957,7 @@ def main():
                 model_id=args.model_id,
                 model_provider=args.model_provider,
                 max_steps=args.max_steps,
+                temperature=args.temperature,
             )
         
         print(result)
