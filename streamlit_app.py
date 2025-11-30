@@ -1,10 +1,16 @@
 """
 Streamlit UI for the LLM-powered MCP Stock Analyzer.
 
+NEW: Agent Type Selection
+- ToolCallingAgent (original): JSON-based tool calls
+- CodeAgent (new): Python code-based, efficient loops
+
 All analysis features use AI to interpret data and generate professional reports:
 - Technical Analysis: 4 trading strategies on a single stock
 - Market Scanner: Compare multiple stocks, rank opportunities  
 - Fundamental Analysis: Financial statements interpretation
+- Multi-Sector Analysis: Cross-sector comparison
+- Combined Analysis: Technical + Fundamental together
 """
 from __future__ import annotations
 
@@ -18,8 +24,16 @@ import streamlit as st
 API_BASE_URL = os.getenv("STOCK_ANALYZER_API_URL", "http://localhost:8000")
 DEFAULT_PERIOD = os.getenv("DEFAULT_ANALYSIS_PERIOD", "1y")
 DEFAULT_SCANNER_SYMBOLS = os.getenv("DEFAULT_SCANNER_SYMBOLS", "AAPL,MSFT,GOOGL,AMZN")
-DEFAULT_MODEL_ID = os.getenv("SMOLAGENT_MODEL_ID", "gpt-4.1")
+DEFAULT_MODEL_ID = os.getenv("SMOLAGENT_MODEL_ID", "gpt-4o")
 DEFAULT_MODEL_PROVIDER = os.getenv("SMOLAGENT_MODEL_PROVIDER", "litellm")
+DEFAULT_AGENT_TYPE = os.getenv("SMOLAGENT_AGENT_TYPE", "tool_calling")
+
+# Default sectors for multi-sector analysis
+DEFAULT_SECTORS = {
+    "Banking": "JPM,BAC,WFC,C,GS,MS,USB,PNC,TFC,COF",
+    "Technology": "AAPL,MSFT,GOOGL,META,NVDA,AMD,CRM,ORCL,ADBE,INTC",
+    "Clean Energy": "TSLA,NIO,RIVN,LCID,PLUG,SEDG,NEE,ICLN,ENPH",
+}
 
 # Page configuration
 st.set_page_config(
@@ -39,6 +53,21 @@ st.markdown("""
         padding: 1rem;
         border-radius: 0.5rem;
     }
+    .agent-badge {
+        display: inline-block;
+        padding: 0.2rem 0.5rem;
+        border-radius: 0.3rem;
+        font-size: 0.8rem;
+        font-weight: bold;
+    }
+    .agent-tool-calling {
+        background-color: #e3f2fd;
+        color: #1565c0;
+    }
+    .agent-code-agent {
+        background-color: #fff3e0;
+        color: #ef6c00;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -56,6 +85,11 @@ if "model_provider" not in st.session_state:
     st.session_state.model_provider = DEFAULT_MODEL_PROVIDER
 if "openai_api_key" not in st.session_state:
     st.session_state.openai_api_key = os.getenv("OPENAI_API_KEY", "")
+# NEW: Agent type state
+if "agent_type" not in st.session_state:
+    st.session_state.agent_type = DEFAULT_AGENT_TYPE
+if "executor_type" not in st.session_state:
+    st.session_state.executor_type = "local"
 
 
 # =============================================================================
@@ -74,6 +108,11 @@ def call_api(endpoint: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     if st.session_state.openai_api_key:
         payload["openai_api_key"] = st.session_state.openai_api_key
     
+    # NEW: Add agent type settings
+    payload["agent_type"] = st.session_state.agent_type
+    if st.session_state.agent_type == "code_agent":
+        payload["executor_type"] = st.session_state.executor_type
+    
     # Longer timeout for multi-sector analysis (20 minutes)
     timeout = 1200 if "/multisector" in endpoint else 600
     
@@ -90,14 +129,23 @@ def call_api(endpoint: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         raise RuntimeError(f"API Error ({response.status_code}): {detail}")
 
 
-def add_to_history(title: str, report: str, analysis_type: str, duration: float = 0):
+def add_to_history(title: str, report: str, analysis_type: str, duration: float = 0, agent_type: str = ""):
     """Add analysis result to session history."""
     st.session_state.messages.append({
         "title": title,
         "report": report,
         "type": analysis_type,
         "duration": duration,
+        "agent_type": agent_type,
     })
+
+
+def get_agent_badge(agent_type: str) -> str:
+    """Return HTML badge for agent type."""
+    if agent_type == "code_agent":
+        return '<span class="agent-badge agent-code-agent">🐍 CodeAgent</span>'
+    else:
+        return '<span class="agent-badge agent-tool-calling">🔧 ToolCalling</span>'
 
 
 # =============================================================================
@@ -117,7 +165,55 @@ with st.sidebar:
         help="FastAPI backend URL",
     )
     
-    with st.expander("🤖 Model Settings", expanded=False):
+    # NEW: Agent Type Selection (prominent position)
+    st.subheader("🤖 Agent Type")
+    
+    agent_options = {
+        "tool_calling": "🔧 ToolCallingAgent (Original)",
+        "code_agent": "🐍 CodeAgent (New - Faster)",
+    }
+    
+    selected_agent = st.radio(
+        "Select Agent Type",
+        options=list(agent_options.keys()),
+        format_func=lambda x: agent_options[x],
+        index=0 if st.session_state.agent_type == "tool_calling" else 1,
+        help="CodeAgent writes Python code to call tools - more efficient for multi-stock analysis",
+    )
+    st.session_state.agent_type = selected_agent
+    
+    # Show agent comparison
+    if selected_agent == "tool_calling":
+        st.info("""
+        **ToolCallingAgent**
+        - JSON-based tool calls
+        - One tool call per LLM round
+        - More LLM calls needed
+        - ✅ Safe (no code execution)
+        """)
+    else:
+        st.success("""
+        **CodeAgent**
+        - Python code-based
+        - Can use loops & variables
+        - Fewer LLM calls needed
+        - ⚡ Faster for multi-stock
+        """)
+        
+        # Executor type for CodeAgent
+        st.session_state.executor_type = st.selectbox(
+            "Code Executor",
+            ["local", "e2b", "docker"],
+            index=0,
+            help="local=development, e2b/docker=production (sandboxed)",
+        )
+        
+        if st.session_state.executor_type == "local":
+            st.warning("⚠️ Local executor runs code in your environment. Use e2b/docker for production.")
+    
+    st.divider()
+    
+    with st.expander("🧠 Model Settings", expanded=False):
         st.session_state.model_id = st.text_input(
             "Model ID",
             value=st.session_state.model_id,
@@ -153,6 +249,10 @@ with st.sidebar:
     - FastAPI backend running
     - OpenAI API key configured
     """)
+    
+    # Show current agent type prominently
+    st.divider()
+    st.markdown(f"**Current Agent:** {agent_options[st.session_state.agent_type]}")
 
 # Main content - Tabs for different analysis types
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
@@ -179,6 +279,9 @@ with tab1:
     The AI will call each strategy tool, extract metrics, and synthesize a comprehensive report.
     """)
     
+    # Show agent type indicator
+    st.markdown(f"Using: {get_agent_badge(st.session_state.agent_type)}", unsafe_allow_html=True)
+    
     with st.form("technical-form"):
         col1, col2 = st.columns([2, 1])
         with col1:
@@ -203,7 +306,8 @@ with tab1:
             if not tech_symbol.strip():
                 st.error("Please enter a ticker symbol")
             else:
-                with st.spinner(f"🤖 AI is analyzing {tech_symbol.upper()}... This may take 30-60 seconds."):
+                agent_label = "CodeAgent" if st.session_state.agent_type == "code_agent" else "ToolCallingAgent"
+                with st.spinner(f"🤖 {agent_label} is analyzing {tech_symbol.upper()}... This may take 30-60 seconds."):
                     try:
                         response = call_api("/technical", {
                             "symbol": tech_symbol,
@@ -212,15 +316,17 @@ with tab1:
                         
                         report = response.get("report", "No report generated")
                         duration = response.get("duration_seconds", 0)
+                        used_agent = response.get("agent_type", st.session_state.agent_type)
                         
                         add_to_history(
                             f"📈 Technical: {tech_symbol.upper()}",
                             report,
                             "technical",
                             duration,
+                            used_agent,
                         )
                         
-                        st.success(f"✅ Analysis completed in {duration:.1f}s")
+                        st.success(f"✅ Analysis completed in {duration:.1f}s using {used_agent}")
                         st.markdown(report)
                         
                     except Exception as exc:
@@ -240,11 +346,15 @@ with tab2:
     - Rank stocks by technical performance
     - Identify BUY/HOLD/AVOID recommendations
     - Suggest portfolio allocation
-    
-    ⚠️ **Note:** This requires many tool calls. Allow 2-5 minutes for 4+ stocks.
-    
-    💡 **Tip:** For 5+ stocks, consider using `gpt-4o` instead of `gpt-4o-mini` in Model Settings for better results.
     """)
+    
+    # Show agent recommendation
+    st.markdown(f"Using: {get_agent_badge(st.session_state.agent_type)}", unsafe_allow_html=True)
+    
+    if st.session_state.agent_type == "tool_calling":
+        st.info("💡 **Tip:** Switch to CodeAgent in sidebar for faster multi-stock analysis!")
+    else:
+        st.success("⚡ CodeAgent will use efficient loops for faster scanning!")
     
     with st.form("scanner-form"):
         scanner_symbols = st.text_input(
@@ -275,7 +385,8 @@ with tab2:
             if not scanner_symbols.strip():
                 st.error("Please enter at least one ticker symbol")
             else:
-                with st.spinner(f"🤖 AI is scanning {symbol_count} stocks... This may take several minutes."):
+                agent_label = "CodeAgent" if st.session_state.agent_type == "code_agent" else "ToolCallingAgent"
+                with st.spinner(f"🤖 {agent_label} is scanning {symbol_count} stocks... This may take several minutes."):
                     try:
                         response = call_api("/scanner", {
                             "symbols": scanner_symbols,
@@ -284,15 +395,17 @@ with tab2:
                         
                         report = response.get("report", "No report generated")
                         duration = response.get("duration_seconds", 0)
+                        used_agent = response.get("agent_type", st.session_state.agent_type)
                         
                         add_to_history(
                             f"🔍 Scanner: {scanner_symbols.upper()[:30]}...",
                             report,
                             "scanner",
                             duration,
+                            used_agent,
                         )
                         
-                        st.success(f"✅ Scanner completed in {duration:.1f}s")
+                        st.success(f"✅ Scanner completed in {duration:.1f}s using {used_agent}")
                         st.markdown(report)
                         
                     except Exception as exc:
@@ -315,21 +428,24 @@ with tab3:
     And provide: Strengths, Risks, Valuation perspective, and a BUY/HOLD/SELL recommendation.
     """)
     
+    st.markdown(f"Using: {get_agent_badge(st.session_state.agent_type)}", unsafe_allow_html=True)
+    
     with st.form("fundamental-form"):
         col1, col2 = st.columns([2, 1])
         with col1:
             fund_symbol = st.text_input(
                 "Ticker Symbol",
-                value="MSFT",
+                value="AAPL",
                 placeholder="e.g., AAPL, MSFT, GOOGL",
                 key="fund_symbol",
             )
         with col2:
             fund_period = st.selectbox(
-                "Statement Period",
+                "Period",
                 ["3y", "5y", "1y"],
                 index=0,
                 key="fund_period",
+                help="Years of financial data to analyze",
             )
         
         fund_submit = st.form_submit_button(
@@ -341,7 +457,8 @@ with tab3:
             if not fund_symbol.strip():
                 st.error("Please enter a ticker symbol")
             else:
-                with st.spinner(f"🤖 AI is analyzing {fund_symbol.upper()} financials..."):
+                agent_label = "CodeAgent" if st.session_state.agent_type == "code_agent" else "ToolCallingAgent"
+                with st.spinner(f"🤖 {agent_label} is analyzing {fund_symbol.upper()} financials... This may take 30-45 seconds."):
                     try:
                         response = call_api("/fundamental", {
                             "symbol": fund_symbol,
@@ -350,15 +467,17 @@ with tab3:
                         
                         report = response.get("report", "No report generated")
                         duration = response.get("duration_seconds", 0)
+                        used_agent = response.get("agent_type", st.session_state.agent_type)
                         
                         add_to_history(
                             f"💰 Fundamental: {fund_symbol.upper()}",
                             report,
                             "fundamental",
                             duration,
+                            used_agent,
                         )
                         
-                        st.success(f"✅ Analysis completed in {duration:.1f}s")
+                        st.success(f"✅ Fundamental analysis completed in {duration:.1f}s using {used_agent}")
                         st.markdown(report)
                         
                     except Exception as exc:
@@ -368,28 +487,25 @@ with tab3:
 # Tab 4: Multi-Sector Analysis
 # =============================================================================
 
-# Default sector configurations
-DEFAULT_SECTORS = {
-    "Banking": "JPM,BAC,WFC,C,GS,MS,USB,PNC,TFC,COF",
-    "Technology": "AAPL,MSFT,GOOGL,META,NVDA,AMD,CRM,ORCL,ADBE,INTC",
-    "Clean Energy": "TSLA,NIO,RIVN,LCID,PLUG,SEDG,NEE,ICLN,ENPH",
-}
-
 with tab4:
     st.subheader("🌐 Multi-Sector Analysis")
     st.markdown("""
-    Compare **multiple sectors** and identify the best opportunities across the market.
+    Compare stocks **across multiple sectors** to find the best opportunities.
     
     The AI will:
     - Analyze ALL stocks in EACH sector
     - Compare performance across sectors
     - Identify top picks from the entire universe
     - Suggest portfolio allocation by sector
-    
-    ⚠️ **Note:** This is compute-intensive. For 3 sectors with ~10 stocks each, expect 5-15 minutes.
-    
-    💡 **Tip:** Use `gpt-4o` (not mini) in Model Settings for best results with this many stocks.
     """)
+    
+    # Show agent recommendation (strong recommendation for CodeAgent)
+    st.markdown(f"Using: {get_agent_badge(st.session_state.agent_type)}", unsafe_allow_html=True)
+    
+    if st.session_state.agent_type == "tool_calling":
+        st.warning("⚠️ **Strongly recommend CodeAgent** for multi-sector! Switch in sidebar for 3-5x faster analysis.")
+    else:
+        st.success("⚡ CodeAgent will use nested loops for efficient multi-sector analysis!")
     
     # Initialize sector configuration in session state
     if "sector_configs" not in st.session_state:
@@ -494,8 +610,9 @@ with tab4:
             ]
             
             sector_names = ", ".join(s["name"] for s in valid_sectors)
+            agent_label = "CodeAgent" if st.session_state.agent_type == "code_agent" else "ToolCallingAgent"
             
-            with st.spinner(f"🤖 AI is analyzing {len(valid_sectors)} sectors ({total_stocks} stocks)... This may take 5-15 minutes."):
+            with st.spinner(f"🤖 {agent_label} is analyzing {len(valid_sectors)} sectors ({total_stocks} stocks)... This may take 5-15 minutes."):
                 try:
                     response = call_api("/multisector", {
                         "sectors": sectors_payload,
@@ -504,15 +621,17 @@ with tab4:
                     
                     report = response.get("report", "No report generated")
                     duration = response.get("duration_seconds", 0)
+                    used_agent = response.get("agent_type", st.session_state.agent_type)
                     
                     add_to_history(
                         f"🌐 Multi-Sector: {sector_names}",
                         report,
                         "multi_sector",
                         duration,
+                        used_agent,
                     )
                     
-                    st.success(f"✅ Multi-sector analysis completed in {duration:.1f}s")
+                    st.success(f"✅ Multi-sector analysis completed in {duration:.1f}s using {used_agent}")
                     st.markdown(report)
                     
                 except Exception as exc:
@@ -542,6 +661,8 @@ with tab5:
     - ⚠️ When they **diverge** → Caution, deeper analysis needed
     - 📊 360-degree investment view for better decisions
     """)
+    
+    st.markdown(f"Using: {get_agent_badge(st.session_state.agent_type)}", unsafe_allow_html=True)
     
     st.info("""
     💡 **Research shows** that combining fundamental and technical analysis leads to better 
@@ -584,7 +705,8 @@ with tab5:
             if not combined_symbol.strip():
                 st.error("Please enter a ticker symbol")
             else:
-                with st.spinner(f"🤖 AI is analyzing {combined_symbol.upper()} (Technical + Fundamental)... This may take 1-2 minutes."):
+                agent_label = "CodeAgent" if st.session_state.agent_type == "code_agent" else "ToolCallingAgent"
+                with st.spinner(f"🤖 {agent_label} is analyzing {combined_symbol.upper()} (Technical + Fundamental)... This may take 1-2 minutes."):
                     try:
                         response = call_api("/combined", {
                             "symbol": combined_symbol,
@@ -594,15 +716,17 @@ with tab5:
                         
                         report = response.get("report", "No report generated")
                         duration = response.get("duration_seconds", 0)
+                        used_agent = response.get("agent_type", st.session_state.agent_type)
                         
                         add_to_history(
                             f"🔄 Combined: {combined_symbol.upper()}",
                             report,
                             "combined",
                             duration,
+                            used_agent,
                         )
                         
-                        st.success(f"✅ Combined analysis completed in {duration:.1f}s")
+                        st.success(f"✅ Combined analysis completed in {duration:.1f}s using {used_agent}")
                         st.markdown(report)
                         
                     except Exception as exc:
@@ -627,8 +751,13 @@ else:
     for idx, entry in enumerate(reversed(st.session_state.messages), 1):
         title = entry["title"]
         duration = entry.get("duration", 0)
+        agent_used = entry.get("agent_type", "unknown")
         
-        with st.expander(f"{idx}. {title} ({duration:.1f}s)", expanded=(idx == 1)):
+        # Create title with agent badge
+        agent_emoji = "🐍" if agent_used == "code_agent" else "🔧"
+        
+        with st.expander(f"{idx}. {title} ({duration:.1f}s) {agent_emoji}", expanded=(idx == 1)):
+            st.caption(f"Agent: {agent_used}")
             st.markdown(entry["report"])
 
 # =============================================================================
@@ -636,7 +765,8 @@ else:
 # =============================================================================
 
 st.divider()
-st.caption("""
-**MCP Stock Analyzer** • Powered by smolagents + LiteLLM + MCP Finance Tools  
+st.caption(f"""
+**MCP Stock Analyzer** v2.3.0 • Powered by smolagents + LiteLLM + MCP Finance Tools  
+Current Agent: **{st.session_state.agent_type}** | Model: **{st.session_state.model_id}**  
 *This tool is for educational purposes only. Not financial advice.*
 """)
