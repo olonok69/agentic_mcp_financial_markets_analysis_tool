@@ -40,22 +40,178 @@ Esta Aplicación: "AAPL muestra condiciones de sobreventa con RSI en 28.5,
 
 ---
 
-## 🏗️ Arquitectura
+## 🤖 Dos Arquitecturas de Agentes
 
-### Componentes del Sistema
+Esta aplicación soporta **dos tipos diferentes de agentes de IA**, cada uno con ventajas distintas:
+
+### 🔧 ToolCallingAgent (Original)
+
+El enfoque tradicional donde el LLM genera JSON para llamar herramientas una a la vez.
 
 <p align="center">
-  <img src="docs/architecture.svg" alt="Arquitectura del Sistema" width="900">
+  <img src="docs/architecture.svg" alt="Arquitectura ToolCallingAgent" width="900">
 </p>
 
+### 🐍 CodeAgent (Nuevo - Recomendado)
+
+El enfoque avanzado donde el LLM escribe código Python para llamar herramientas, permitiendo loops y variables.
+
+<p align="center">
+  <img src="docs/architecture_codeagent.svg" alt="Arquitectura CodeAgent" width="900">
+</p>
+
+---
+
+## ⚖️ Comparación de Agentes: ToolCallingAgent vs CodeAgent
+
+### Cómo Funcionan
+
+| Aspecto | 🔧 ToolCallingAgent | 🐍 CodeAgent |
+|---------|---------------------|--------------|
+| **Formato de Salida** | Llamadas JSON a herramientas | Código Python |
+| **Invocación de Herramientas** | `{"tool": "analyze", "args": {...}}` | `result = analyze(symbol="AAPL")` |
+| **Multi-herramienta** | Una llamada por ronda LLM | Puede hacer batch con loops |
+| **Variables** | ❌ No puede almacenar resultados | ✅ Puede usar variables |
+| **Loops** | ❌ No soportado | ✅ `for stock in stocks:` |
+| **Condicionales** | ❌ No soportado | ✅ `if signal == "BUY":` |
+
+### Ejemplo: Analizando 5 Acciones
+
+**Enfoque ToolCallingAgent:**
+```
+Ronda 1: LLM → "Llamar analyze(AAPL)" → Resultado
+Ronda 2: LLM → "Llamar analyze(MSFT)" → Resultado  
+Ronda 3: LLM → "Llamar analyze(GOOGL)" → Resultado
+Ronda 4: LLM → "Llamar analyze(META)" → Resultado
+Ronda 5: LLM → "Llamar analyze(NVDA)" → Resultado
+Ronda 6: LLM → Sintetizar todos los resultados → Informe
+
+Total: 6 llamadas LLM
+```
+
+**Enfoque CodeAgent:**
+```python
+# LLM genera este código en UNA ronda:
+results = {}
+for stock in ["AAPL", "MSFT", "GOOGL", "META", "NVDA"]:
+    results[stock] = analyze(symbol=stock, period="1y")
+
+# Calcular consenso
+buy_signals = sum(1 for r in results.values() if "BUY" in r)
+report = f"Consenso: {buy_signals}/5 acciones muestran señales COMPRA..."
+
+final_answer(report)
+
+Total: 1-2 llamadas LLM
+```
+
+### Comparación de Rendimiento
+
+| Escenario | ToolCallingAgent | CodeAgent | Mejora |
+|-----------|-----------------|-----------|--------|
+| 1 acción, 4 herramientas | ~45 segundos | ~40 segundos | ~10% más rápido |
+| 5 acciones, 4 herramientas cada una | ~3 minutos | ~1.5 minutos | ~50% más rápido |
+| 3 sectores, 30 acciones | ~15 minutos | ~5 minutos | ~66% más rápido |
+
+### Pros y Contras
+
+#### 🔧 ToolCallingAgent
+
+| ✅ Pros | ❌ Contras |
+|---------|-----------|
+| Simple y predecible | Una llamada de herramienta por ronda LLM |
+| Sin riesgos de ejecución de código | Más llamadas API LLM = mayor costo |
+| Más fácil de depurar | Más lento para análisis multi-acción |
+| Funciona con cualquier LLM | No puede componer lógica compleja |
+| Enfoque probado | Limitado a ejecución secuencial |
+
+**Mejor Para:**
+- Análisis de acción única
+- Consultas simples
+- Ambientes de producción con seguridad estricta
+- LLMs con generación de código débil
+
+#### 🐍 CodeAgent
+
+| ✅ Pros | ❌ Contras |
+|---------|-----------|
+| Loops eficientes para multi-acción | Requiere sandbox de ejecución de código |
+| Menos llamadas LLM = menor costo | Más complejo de depurar |
+| Puede almacenar y reusar resultados | Necesita LLM con buenas habilidades Python |
+| Razonamiento natural basado en código | Consideraciones de seguridad |
+| Mejor para análisis complejos | Puede generar código inválido |
+
+**Mejor Para:**
+- Escaneo multi-acción
+- Análisis multi-sector
+- Análisis comparativo complejo
+- Ambientes de desarrollo
+- Uso consciente de costos
+
+### Consideraciones de Seguridad
+
+| Ejecutor | Nivel de Seguridad | Caso de Uso |
+|----------|-------------------|-------------|
+| `local` | ⚠️ Bajo | Solo desarrollo |
+| `e2b` | ✅ Alto | Producción (sandbox cloud) |
+| `docker` | ✅ Alto | Producción (auto-hospedado) |
+
+```python
+# Desarrollo (ejecución local)
+agent = CodeAgent(tools=tools, model=model, executor_type="local")
+
+# Producción (sandbox E2B)
+agent = CodeAgent(tools=tools, model=model, executor_type="e2b")
+
+# Producción (sandbox Docker)
+agent = CodeAgent(tools=tools, model=model, executor_type="docker")
+```
+
+### Cuándo Usar Cuál
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                  DIAGRAMA DE DECISIÓN                           │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ¿Analizando acción única?                                      │
+│      │                                                          │
+│      ├── SÍ → Cualquier agente funciona bien                    │
+│      │                                                          │
+│      └── NO (múltiples acciones)                                │
+│              │                                                  │
+│              └── Usar CodeAgent (2-3x más rápido)               │
+│                                                                 │
+│  ¿Ambiente de producción?                                      │
+│      │                                                          │
+│      ├── SÍ + Seguridad crítica → ToolCallingAgent              │
+│      │                                                          │
+│      ├── SÍ + Rendimiento crítico → CodeAgent + e2b/docker      │
+│      │                                                          │
+│      └── NO (desarrollo) → CodeAgent + local                    │
+│                                                                 │
+│  ¿LLM tiene habilidades Python débiles?                        │
+│      │                                                          │
+│      └── SÍ → ToolCallingAgent (más confiable)                  │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🏗️ Descripción General de la Arquitectura
+
 **Resumen del Flujo de Datos:**
-1. **Streamlit** → El usuario interactúa con la interfaz web (5 pestañas de análisis)
-2. **FastAPI** → La API REST recibe solicitudes, valida la entrada
-3. **smolagents** → El agente de IA decide qué herramientas llamar
-4. **LLM API** → OpenAI/HuggingFace procesa prompts, guía la selección de herramientas
-5. **MCP Client** → Conecta smolagents con el servidor MCP vía stdio
+
+Ambos tipos de agentes siguen el mismo flujo de alto nivel:
+
+1. **Streamlit** → El usuario interactúa con la interfaz web
+2. **FastAPI** → La API REST recibe solicitudes, selecciona el tipo de agente
+3. **Agent** → ToolCallingAgent O CodeAgent procesa la solicitud
+4. **LLM API** → OpenAI/HuggingFace guía la selección de herramientas
+5. **MCP Client** → Conecta el agente al servidor MCP
 6. **MCP Server** → Ejecuta herramientas de análisis financiero
-7. **Strategies** → Calcula indicadores técnicos, ejecuta backtests
+7. **Strategies** → Calcula indicadores técnicos
 8. **Yahoo Finance** → Proporciona datos de mercado
 
 ### Estructura de Carpetas
@@ -80,11 +236,17 @@ mcp_financial_markets_analysis_tool/
 │
 ├── stock_analyzer_bot/              # Smolagents Bot (Orquestación de IA)
 │   ├── __init__.py
-│   ├── main.py                      # Funciones de análisis y prompts LLM
+│   ├── main.py                      # Implementación ToolCallingAgent
+│   ├── main_codeagent.py            # Implementación CodeAgent (NUEVO)
 │   ├── api.py                       # Endpoints REST de FastAPI
 │   ├── tools.py                     # Wrappers de herramientas Smolagents
 │   ├── mcp_client.py                # Gestor de conexión MCP
 │   └── README.md                    # 📚 Documentación Detallada del Bot
+│
+├── docs/
+│   ├── architecture.svg             # Diagrama ToolCallingAgent
+│   ├── architecture_codeagent.svg   # Diagrama CodeAgent (NUEVO)
+│   └── SECTORS_REFERENCE.md         # Referencia de símbolos de sectores
 │
 ├── streamlit_app.py                 # Interfaz Web (5 Pestañas de Análisis)
 ├── .env                             # Variables de entorno
@@ -97,6 +259,22 @@ mcp_financial_markets_analysis_tool/
 ## 🤖 Entendiendo Smolagents
 
 ### ¿Qué es Smolagents?
+
+[**Smolagents**](https://huggingface.co/docs/smolagents/index) es una biblioteca Python de código abierto de Hugging Face que facilita la construcción de agentes de IA que pueden usar herramientas.
+
+> *"smolagents está diseñado para hacer extremadamente fácil construir y ejecutar agentes usando solo unas pocas líneas de código."* - HuggingFace
+
+### Por Qué se Recomienda CodeAgent
+
+Según [investigación de HuggingFace](https://huggingface.co/docs/smolagents/tutorials/secure_code_execution):
+
+> *"Múltiples estudios de investigación han demostrado que hacer que el LLM escriba sus acciones en código es mucho mejor que el formato estándar actual para llamadas de herramientas, que son diferentes variantes de escribir acciones como JSON."*
+
+**El código es mejor porque:**
+- **Composabilidad**: Anidar funciones, usar loops, crear lógica reutilizable
+- **Gestión de Objetos**: Almacenar salidas en variables para uso posterior
+- **Generalidad**: Expresar cualquier cálculo, no solo llamadas de herramientas
+- **Datos de Entrenamiento**: Los LLMs han visto mucho código Python en entrenamiento
 
 [**Smolagents**](https://huggingface.co/docs/smolagents/index) es una biblioteca Python de código abierto de Hugging Face que facilita la construcción de agentes de IA que pueden usar herramientas. Es el "cerebro" de nuestra aplicación.
 
@@ -162,9 +340,34 @@ Por eso los resultados están **interpretados**, no solo mostrados.
 
 ---
 
-## 📱 Interfaz Streamlit - 5 Tipos de Análisis
+## 📱 Interfaz Streamlit
 
-### Pestaña 1: 📈 Análisis Técnico
+### Selector de Tipo de Agente
+
+La barra lateral ahora incluye un selector de tipo de agente:
+
+```
+┌─────────────────────────────────────┐
+│  ⚙️ Configuración                   │
+│                                     │
+│  🤖 Tipo de Agente                  │
+│  ○ 🔧 ToolCallingAgent (Original)   │
+│  ● 🐍 CodeAgent (Nuevo - Más Rápido)│
+│                                     │
+│  Ejecutor de Código: [local ▼]      │
+│                                     │
+└─────────────────────────────────────┘
+```
+
+### 5 Tipos de Análisis
+
+| Pestaña | Descripción | Agente Recomendado |
+|---------|-------------|-------------------|
+| 📈 Técnico | Acción única, 4 estrategias | Cualquiera |
+| 🔍 Escáner | Comparación multi-acción | 🐍 CodeAgent |
+| 📊 Fundamental | Estados financieros | Cualquiera |
+| 🌐 Multi-Sector | Análisis entre sectores | 🐍 CodeAgent |
+| 🔄 Combinado | Téc + Fundamental | Cualquiera |
 
 **Propósito:** Análisis profundo de una sola acción usando 4 estrategias de trading
 
@@ -299,9 +502,13 @@ OPENAI_API_KEY=sk-tu-clave-openai-aqui
 # O
 HF_TOKEN=hf_tu-token-huggingface
 
-# Opcional - Configuración del Modelo
-SMOLAGENT_MODEL_ID=gpt-4o           # Modelo predeterminado
+# Configuración del Modelo
+SMOLAGENT_MODEL_ID=gpt-4o           # Recomendado para CodeAgent
 SMOLAGENT_MODEL_PROVIDER=litellm     # litellm o inference
+
+# Configuración del Agente (NUEVO)
+SMOLAGENT_AGENT_TYPE=code_agent      # tool_calling o code_agent
+SMOLAGENT_EXECUTOR=local             # local, e2b, o docker
 SMOLAGENT_MAX_STEPS=25               # Pasos máximos de razonamiento
 
 # Opcional - Valores Predeterminados
@@ -339,48 +546,47 @@ El **Model Context Protocol Server** proporciona todas las herramientas de anál
 
 ### 2. Stock Analyzer Bot (`stock_analyzer_bot/`)
 
-La **capa de orquestación impulsada por smolagents** que usa LLMs para llamar herramientas y generar informes.
+La **capa de orquestación impulsada por smolagents** con soporte dual de agentes.
 
-**Características Clave:**
-- ToolCallingAgent con 7 herramientas envueltas
-- 5 funciones de análisis para diferentes casos de uso
-- Ingeniería de prompts inteligente
-- Endpoints REST de FastAPI
+**Archivos Clave:**
+- `main.py` - Implementación ToolCallingAgent
+- `main_codeagent.py` - Implementación CodeAgent
+- `api.py` - Endpoints FastAPI con selección de agente
+- `tools.py` - Wrappers de herramientas MCP
 
 📚 **Documentación Detallada:** [stock_analyzer_bot/README.md](stock_analyzer_bot/README.md)
 
 ### 3. Frontend Streamlit (`streamlit_app.py`)
 
-La **interfaz web** que proporciona 5 pestañas de análisis con historial de sesión.
-
-**Características Clave:**
-- 5 pestañas de tipos de análisis
-- Barra lateral de configuración de modelo
-- Seguimiento del historial de análisis
-- Renderizado de informes Markdown
+La **interfaz web** con alternancia de agente y 5 pestañas de análisis.
 
 ---
 
 ## 📡 Referencia de API
 
+### Selección de Agente
+
+Todos los endpoints ahora aceptan el parámetro `agent_type`:
+
+```json
+{
+  "symbol": "AAPL",
+  "period": "1y",
+  "agent_type": "code_agent",
+  "executor_type": "local"
+}
+```
+
 ### Endpoints Disponibles
 
 | Endpoint | Método | Descripción |
 |----------|--------|-------------|
-| `/health` | GET | Verificación de salud e info de versión |
+| `/health` | GET | Verificación de salud, muestra agentes disponibles |
 | `/technical` | POST | Acción única, 4 estrategias |
 | `/scanner` | POST | Comparación multi-acción |
 | `/fundamental` | POST | Análisis de estados financieros |
 | `/multisector` | POST | Análisis entre sectores |
 | `/combined` | POST | Técnico + Fundamental |
-
-### Ejemplo de Llamada API
-
-```bash
-curl -X POST "http://localhost:8000/technical" \
-  -H "Content-Type: application/json" \
-  -d '{"symbol": "AAPL", "period": "1y"}'
-```
 
 ### Formato de Respuesta
 
@@ -389,7 +595,8 @@ curl -X POST "http://localhost:8000/technical" \
   "report": "# Análisis Técnico Completo de AAPL\n...",
   "symbol": "AAPL",
   "analysis_type": "technical",
-  "duration_seconds": 45.2
+  "duration_seconds": 35.2,
+  "agent_type": "code_agent"
 }
 ```
 
@@ -399,16 +606,40 @@ curl -X POST "http://localhost:8000/technical" \
 
 ### Modelos LLM Soportados
 
-| Proveedor | Model ID | Mejor Para |
-|-----------|----------|------------|
-| OpenAI | `gpt-4o` | Mejor calidad, recomendado |
-| OpenAI | `gpt-4o-mini` | Más rápido, económico |
-| OpenAI | `gpt-4-turbo` | Buen balance |
-| HuggingFace | `meta-llama/Llama-3.1-70B-Instruct` | Código abierto |
+| Proveedor | Model ID | Soporte CodeAgent |
+|-----------|----------|-------------------|
+| OpenAI | `gpt-4o` | ✅ Excelente |
+| OpenAI | `gpt-4o-mini` | ✅ Bueno |
+| OpenAI | `gpt-4-turbo` | ✅ Excelente |
+| HuggingFace | `meta-llama/Llama-3.1-70B-Instruct` | ⚠️ Variable |
+
+**Nota:** CodeAgent funciona mejor con modelos que tienen fuertes habilidades de generación de código Python. Se recomienda GPT-4o.
 
 ### Períodos de Análisis
 
 Períodos válidos: `1d`, `5d`, `1mo`, `3mo`, `6mo`, `1y`, `2y`, `5y`, `10y`, `ytd`, `max`
+
+---
+
+## 🧪 Probando Ambos Agentes
+
+### Comparación Rápida
+
+```bash
+# Probar ambos agentes en la misma acción
+python test_codeagent.py AAPL
+
+# Probar en escáner de mercado
+python test_codeagent.py AAPL --mode scanner --symbols "AAPL,MSFT,GOOGL"
+```
+
+### En Streamlit
+
+1. Ejecutar Análisis Técnico con **ToolCallingAgent**
+2. Anotar la duración en Historial
+3. Cambiar a **CodeAgent** en la barra lateral
+4. Ejecutar el mismo análisis
+5. Comparar tiempos
 
 ### Parámetros de Estrategia
 
@@ -454,6 +685,13 @@ Períodos válidos: `1d`, `5d`, `1mo`, `3mo`, `6mo`, `1y`, `2y`, `5y`, `10y`, `y
 
 ## 🔒 Seguridad y Descargos de Responsabilidad
 
+### Seguridad de Ejecución de Código
+
+Cuando se usa CodeAgent:
+- **Desarrollo**: El ejecutor `local` está bien
+- **Producción**: Usar `e2b` o `docker` para ejecución en sandbox
+- Nunca ejecutar código no confiable en ejecutor local
+
 ### Seguridad de Claves API
 
 - Nunca envíes archivos `.env` al control de versiones
@@ -468,13 +706,6 @@ Períodos válidos: `1d`, `5d`, `1mo`, `3mo`, `6mo`, `1y`, `2y`, `5y`, `10y`, `y
 - El rendimiento pasado no garantiza resultados futuros
 - Esto NO es asesoría financiera
 - Consulta un asesor financiero licenciado antes de invertir
-- Los autores no asumen responsabilidad por decisiones de inversión
-
-### Fuentes de Datos
-
-- Datos de mercado de Yahoo Finance (sujeto a sus términos de servicio)
-- Los datos pueden tener retrasos, brechas o inexactitudes
-- Siempre verifica los datos contra fuentes oficiales
 
 ---
 
@@ -482,10 +713,10 @@ Períodos válidos: `1d`, `5d`, `1mo`, `3mo`, `6mo`, `1y`, `2y`, `5y`, `10y`, `y
 
 | Problema | Solución |
 |----------|----------|
+| "CodeAgent not available" | Asegúrate de que `main_codeagent.py` existe en `stock_analyzer_bot/` |
+| "Code execution failed" | Verifica sintaxis Python en salida LLM, prueba diferente modelo |
 | "MCP server not found" | Verifica que `server/main.py` existe en la raíz del proyecto |
-| "Connection refused" | Inicia FastAPI: `uvicorn stock_analyzer_bot.api:app --port 8000` |
-| "Authentication error" | Verifica `OPENAI_API_KEY` en `.env` |
-| "Timeout" | Reduce el número de acciones o aumenta el timeout |
+| "Timeout" | Reduce acciones o aumenta timeout; usa CodeAgent para multi-acción |
 | "Agent stopped early" | Aumenta el parámetro `max_steps` |
 
 ---
@@ -495,26 +726,29 @@ Períodos válidos: `1d`, `5d`, `1mo`, `3mo`, `6mo`, `1y`, `2y`, `5y`, `10y`, `y
 | Documento | Descripción |
 |-----------|-------------|
 | [server/README.md](server/README.md) | Herramientas del MCP Server, estrategias, parámetros |
-| [stock_analyzer_bot/README.md](stock_analyzer_bot/README.md) | Integración de Smolagents, endpoints API |
-| [HuggingFace Smolagents Docs](https://huggingface.co/docs/smolagents/index) | Documentación oficial de smolagents |
-| [MCP Documentation](https://modelcontextprotocol.io/) | Especificación del Model Context Protocol |
+| [stock_analyzer_bot/README.md](stock_analyzer_bot/README.md) | Implementaciones de agentes, endpoints API |
+| [docs/SECTORS_REFERENCE.md](docs/SECTORS_REFERENCE.md) | Símbolos de sectores y configuración |
+| [HuggingFace Smolagents](https://huggingface.co/docs/smolagents/index) | Documentación oficial de smolagents |
+| [Secure Code Execution](https://huggingface.co/docs/smolagents/tutorials/secure_code_execution) | Guía de seguridad de CodeAgent |
 
 ---
 
 ## 🤝 Contribuir
 
 1. Haz fork del repositorio
-2. Crea una rama de característica (`git checkout -b feature/nueva-estrategia`)
+2. Crea una rama de característica
 3. Implementa tus cambios
 4. Agrega pruebas si aplica
 5. Envía un pull request
 
-### Agregar Nuevas Estrategias
+### Agregar Nuevos Tipos de Agentes
 
-1. Crea módulo de estrategia en `server/strategies/`
-2. Regístrala con el servidor MCP en `server/main.py`
-3. Crea wrapper de herramienta en `stock_analyzer_bot/tools.py`
-4. Actualiza prompts en `stock_analyzer_bot/main.py`
+La arquitectura soporta agregar nuevos tipos de agentes:
+
+1. Crear nuevo módulo en `stock_analyzer_bot/`
+2. Implementar las mismas firmas de función que `main.py`
+3. Registrar en `api.py` con nueva opción de tipo de agente
+4. Actualizar UI en `streamlit_app.py`
 
 ---
 
@@ -536,3 +770,8 @@ Este proyecto se proporciona para fines educativos. Los usuarios deben cumplir c
 - [Streamlit](https://streamlit.io/) por la interfaz web
 
 ---
+
+<p align="center">
+  <b>Construido con ❤️ usando smolagents, MCP, FastAPI y Streamlit</b><br>
+  <i>Ahora con soporte dual de agentes: ToolCallingAgent y CodeAgent</i>
+</p>

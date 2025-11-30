@@ -11,3 +11,8 @@ wheels/
 .env
 .lock
 examples/
+*.pdf
+readme_es.pdf
+docs/Sectors_reference.pdf
+stock_analyzer_bot/README_ES.pdf
+readme_es.pdf

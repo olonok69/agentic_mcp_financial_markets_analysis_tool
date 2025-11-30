@@ -1,514 +1,122 @@
 """
-Smolagents-powered stock analyzer using CodeAgent for better tool orchestration.
+CodeAgent implementation using LOW-LEVEL MCP tools with Python orchestration.
 
-This module uses CodeAgent instead of ToolCallingAgent, allowing the LLM to write
-Python code to call tools. This provides:
-- Better composability (loops, conditionals)
-- More efficient multi-tool calls
-- Natural code-based reasoning
-
-Analysis types:
-1. Technical Analysis - Single stock, multiple strategies
-2. Market Scanner - Multiple stocks comparison
-3. Fundamental Analysis - Financial statements interpretation
-4. Multi-Sector Analysis - Cross-sector comparison
-5. Combined Analysis - Technical + Fundamental
-
-Reference: https://huggingface.co/docs/smolagents/tutorials/secure_code_execution
+#####################################################################
+# CODEAGENT APPROACH
+#####################################################################
+#
+# This agent uses LOW-LEVEL granular tools and writes Python code
+# to orchestrate them. The LLM generates loops, variables, and logic.
+#
+# TOOLS USED:
+#   - bollinger_fibonacci_analysis: Single strategy, single stock
+#   - macd_donchian_analysis: Single strategy, single stock
+#   - connors_zscore_analysis: Single strategy, single stock
+#   - dual_moving_average_analysis: Single strategy, single stock
+#   - fundamental_analysis_report: For combined analysis
+#
+# ADVANTAGES:
+#   - Flexible: LLM can write custom logic
+#   - Composable: Combine tools in any way
+#   - Transparent: See exactly what code runs
+#
+# COMPARISON WITH ToolCallingAgent:
+#   - ToolCallingAgent: "unified_market_scanner(AAPL,MSFT,GOOGL)" → 1 call
+#   - CodeAgent: for stock in stocks: for strategy in strategies: ... → custom code
+#
+# CODE EXAMPLE (what the LLM generates):
+#   ```python
+#   results = {}
+#   for stock in ["AAPL", "MSFT", "GOOGL"]:
+#       results[stock] = {
+#           "bb_fib": bollinger_fibonacci_analysis(symbol=stock),
+#           "macd": macd_donchian_analysis(symbol=stock),
+#           "connors": connors_zscore_analysis(symbol=stock),
+#           "dual_ma": dual_moving_average_analysis(symbol=stock),
+#       }
+#   # Custom analysis logic here
+#   final_answer(report)
+#   ```
+#
+#####################################################################
 """
 from __future__ import annotations
 
+import argparse
 import os
-from pathlib import Path
-from typing import Optional, Literal
+import sys
+from typing import Dict, Literal, Optional
 
 from dotenv import load_dotenv
-from smolagents import CodeAgent, LiteLLMModel, InferenceClientModel
+from smolagents import LiteLLMModel, InferenceClientModel, CodeAgent
 
-# Support running either as a package module or as a standalone script.
-if __package__ in (None, ""):
-    import sys
-    ROOT = Path(__file__).resolve().parents[1]
-    if str(ROOT) not in sys.path:
-        sys.path.insert(0, str(ROOT))
-    from stock_analyzer_bot.tools import (
-        STRATEGY_TOOLS,
-        ALL_TOOLS,
-        configure_finance_tools,
-        shutdown_finance_tools,
-        fundamental_analysis_report,
-    )
-else:
-    from .tools import (
-        STRATEGY_TOOLS,
-        ALL_TOOLS,
-        configure_finance_tools,
-        shutdown_finance_tools,
-        fundamental_analysis_report,
-    )
+from .tools import (
+    LOW_LEVEL_TOOLS,
+    configure_finance_tools,
+    shutdown_finance_tools,
+)
 
 load_dotenv()
 
-# Defaults - prefer OpenAI for reliability with CodeAgent
+# Default configuration
 DEFAULT_MODEL_ID = os.getenv("SMOLAGENT_MODEL_ID", "gpt-4o")
 DEFAULT_MODEL_PROVIDER = os.getenv("SMOLAGENT_MODEL_PROVIDER", "litellm")
 DEFAULT_MAX_STEPS = int(os.getenv("SMOLAGENT_MAX_STEPS", "20"))
-
-# Executor type: "local", "e2b", or "docker"
 DEFAULT_EXECUTOR = os.getenv("SMOLAGENT_EXECUTOR", "local")
 
-
-# =============================================================================
-# PROMPT TEMPLATES FOR CODEAGENT
-# =============================================================================
-# CodeAgent prompts are designed for the LLM to write Python code that calls tools.
-# The LLM will write code like:
-#   result = bollinger_fibonacci_analysis(symbol="AAPL", period="1y")
-#   print(result)
-# =============================================================================
-
-TECHNICAL_ANALYSIS_PROMPT = """You are a senior quantitative analyst. Your task is to analyze {symbol} stock using 4 technical strategy tools.
-
-## Available Tools
-You have access to these 4 strategy analysis tools:
-1. `bollinger_fibonacci_analysis(symbol, period)` - Bollinger Bands + Fibonacci retracement
-2. `macd_donchian_analysis(symbol, period)` - MACD momentum + Donchian channel breakouts
-3. `connors_zscore_analysis(symbol, period)` - Connors RSI + Z-Score mean reversion
-4. `dual_moving_average_analysis(symbol, period)` - 50/200 EMA crossover (Golden/Death Cross)
-
-## Instructions
-1. Call ALL 4 tools with symbol="{symbol}" and period="{period}"
-2. Store results in a dictionary for easy access
-3. Extract key metrics: signal, score, return %, Sharpe ratio, max drawdown
-4. Count buy/sell/hold signals for consensus
-5. Generate a comprehensive markdown report
-
-## Code Strategy
-Write Python code that:
-```python
-# Call all 4 strategies and collect results
-results = {{}}
-results["bollinger_fib"] = bollinger_fibonacci_analysis(symbol="{symbol}", period="{period}")
-results["macd_donchian"] = macd_donchian_analysis(symbol="{symbol}", period="{period}")
-results["connors_zscore"] = connors_zscore_analysis(symbol="{symbol}", period="{period}")
-results["dual_ma"] = dual_moving_average_analysis(symbol="{symbol}", period="{period}")
-
-# Analyze the results and create report
-# ... your analysis code ...
-
-final_answer(report)
-```
-
-## Required Report Format
-
-Your final_answer MUST be a complete markdown report starting with:
-
-# {symbol} Comprehensive Technical Analysis
-*Analysis Date: [today's date]*
-
-## Executive Summary
-[2-3 paragraph overview synthesizing all strategy findings]
-
-## Strategy Performance Summary
-
-| Strategy | Signal | Score | Return | vs B&H | Sharpe | Max DD |
-|----------|--------|-------|--------|--------|--------|--------|
-| Bollinger-Fib | [signal] | [score] | [%] | [%] | [ratio] | [%] |
-| MACD-Donchian | [signal] | [score] | [%] | [%] | [ratio] | [%] |
-| Connors-ZScore | [signal] | [score] | [%] | [%] | [ratio] | [%] |
-| Dual MA | [signal] | [score] | [%] | [%] | [ratio] | [%] |
-
-## Signal Consensus
-[X/4 strategies signal BUY, Y/4 signal SELL, Z/4 signal HOLD]
-
-## Individual Strategy Analysis
-[Detailed breakdown of each strategy with key insights]
-
-## Risk Assessment
-[Volatility analysis, max drawdown concerns, position sizing suggestions]
-
-## Final Recommendation: **[BUY/HOLD/SELL]**
-
-### Entry Strategy
-[Specific entry points, stop loss levels]
-
-### Risk Management
-[Position sizing, stop loss placement]
-
-*This analysis is for educational purposes only.*
-
----
-
-IMPORTANT: Your final_answer must be the COMPLETE markdown report, not just a summary.
-"""
-
-
-MARKET_SCANNER_PROMPT = """You are a senior portfolio strategist analyzing multiple stocks for investment opportunities.
-
-## Your Task
-Scan these stocks: {symbols}
-Period: {period}
-
-## Available Tools
-For EACH stock, use these 4 strategy tools:
-1. `bollinger_fibonacci_analysis(symbol, period)`
-2. `macd_donchian_analysis(symbol, period)`
-3. `connors_zscore_analysis(symbol, period)`
-4. `dual_moving_average_analysis(symbol, period)`
-
-## Code Strategy
-Write efficient Python code using loops:
-
-```python
-symbols = "{symbols}".split(",")
-all_results = {{}}
-
-for symbol in symbols:
-    symbol = symbol.strip()
-    all_results[symbol] = {{
-        "bollinger_fib": bollinger_fibonacci_analysis(symbol=symbol, period="{period}"),
-        "macd_donchian": macd_donchian_analysis(symbol=symbol, period="{period}"),
-        "connors_zscore": connors_zscore_analysis(symbol=symbol, period="{period}"),
-        "dual_ma": dual_moving_average_analysis(symbol=symbol, period="{period}"),
-    }}
-
-# Analyze and rank stocks
-# ... your ranking logic ...
-
-final_answer(report)
-```
-
-## Required Report Format
-
-# Multi-Stock Market Analysis Report
-*Analysis Date: [date]*
-*Stocks Analyzed: {symbols}*
-
-## Executive Summary
-[Key findings across all stocks]
-
-## Performance Ranking
-
-| Rank | Symbol | Consensus | Avg Return | Best Strategy | Risk Level | Action |
-|------|--------|-----------|------------|---------------|------------|--------|
-| 1 | [SYM] | [X/4 BUY] | [%] | [strategy] | [Low/Med/High] | [BUY] |
-| 2 | [SYM] | [X/4 BUY] | [%] | [strategy] | [Low/Med/High] | [HOLD] |
-| ... | ... | ... | ... | ... | ... | ... |
-
-## Top Opportunities
-### 🟢 Strong BUY
-[Stocks with 3-4 BUY signals]
-
-### 🟡 Moderate BUY / HOLD
-[Stocks with mixed signals]
-
-### 🔴 AVOID
-[Stocks with SELL signals]
-
-## Individual Stock Breakdown
-[Brief analysis of each stock]
-
-## Portfolio Recommendations
-[Suggested allocation, diversification notes]
-
-*This analysis is for educational purposes only.*
-"""
-
-
-FUNDAMENTAL_ANALYSIS_PROMPT = """You are a senior fundamental analyst creating an investment thesis.
-
-## Your Task
-Analyze {symbol}'s fundamentals using the fundamental_analysis_report tool.
-
-## Available Tool
-`fundamental_analysis_report(symbol, period)` - Returns comprehensive financial data
-
-## Code Strategy
-```python
-# Get fundamental data
-fundamentals = fundamental_analysis_report(symbol="{symbol}", period="{period}")
-
-# Parse and analyze the data
-# Create comprehensive report
-
-final_answer(report)
-```
-
-## Required Report Format
-
-# {symbol} Fundamental Analysis Report
-*Analysis Date: [date]*
-*Data Period: {period}*
-
-## Executive Summary
-[Investment thesis - 2-3 paragraphs]
-
-## Key Metrics
-
-| Metric | Value | Assessment |
-|--------|-------|------------|
-| Revenue | $[X] | [trend] |
-| Net Income | $[X] | [trend] |
-| Net Margin | [%] | [healthy/weak] |
-| Debt-to-Equity | [X] | [conservative/aggressive] |
-| Current Ratio | [X] | [liquid/illiquid] |
-| Free Cash Flow | $[X] | [positive/negative] |
-
-## Income Statement Analysis
-[Revenue trends, profitability]
-
-## Balance Sheet Strength
-[Assets, liabilities, leverage]
-
-## Cash Flow Analysis
-[Operating CF, Free CF, capital allocation]
-
-## Investment Assessment
-### Strengths
-- [Point 1]
-- [Point 2]
-
-### Risks
-- [Risk 1]
-- [Risk 2]
-
-## Final Recommendation: **[BUY/HOLD/SELL]**
-[Rationale and suitable investor profile]
-
-*This analysis is for educational purposes only.*
-"""
-
-
-MULTI_SECTOR_ANALYSIS_PROMPT = """You are a senior portfolio strategist analyzing multiple sectors.
-
-## Your Task
-Analyze these sectors:
-{sectors_formatted}
-
-Period: {period}
-Total stocks: {total_stocks}
-
-## Available Tools
-For EACH stock, use these 4 strategy tools:
-1. `bollinger_fibonacci_analysis(symbol, period)`
-2. `macd_donchian_analysis(symbol, period)`
-3. `connors_zscore_analysis(symbol, period)`
-4. `dual_moving_average_analysis(symbol, period)`
-
-## Code Strategy
-Use nested loops for efficient analysis:
-
-```python
-sectors = {{
-{sectors_dict}
-}}
-
-all_results = {{}}
-for sector_name, symbols in sectors.items():
-    all_results[sector_name] = {{}}
-    for symbol in symbols:
-        all_results[sector_name][symbol] = {{
-            "bollinger_fib": bollinger_fibonacci_analysis(symbol=symbol, period="{period}"),
-            "macd_donchian": macd_donchian_analysis(symbol=symbol, period="{period}"),
-            "connors_zscore": connors_zscore_analysis(symbol=symbol, period="{period}"),
-            "dual_ma": dual_moving_average_analysis(symbol=symbol, period="{period}"),
-        }}
-
-# Cross-sector analysis and ranking
-# ... analysis code ...
-
-final_answer(report)
-```
-
-## Required Report Format
-
-# Multi-Sector Market Analysis Report
-*Analysis Date: [date]*
-
-## Executive Summary
-[Cross-sector insights, market themes]
-
-## Cross-Sector Performance Overview
-
-| Sector | Top Pick | Avg Signal | Best Return | Recommendation |
-|--------|----------|------------|-------------|----------------|
-| [Sector1] | [SYM] | [X/4 BUY] | [%] | [Overweight/Neutral/Underweight] |
-
-## Sector Rankings
-1. **[Best Sector]** - [Why]
-2. **[Second]** - [Why]
-...
-
-## Priority Investment Recommendations
-### 🥇 Top 3 Picks Across All Sectors
-1. [Symbol] ([Sector]) - [Rationale]
-2. [Symbol] ([Sector]) - [Rationale]
-3. [Symbol] ([Sector]) - [Rationale]
-
-## Sector-by-Sector Analysis
-[Detailed breakdown of each sector]
-
-## Portfolio Construction
-[Suggested allocation across sectors]
-
-*This analysis is for educational purposes only.*
-"""
-
-
-COMBINED_ANALYSIS_PROMPT = """You are a senior investment analyst combining Technical and Fundamental analysis.
-
-## Philosophy
-- Fundamental Analysis = "WHAT to buy" (company quality, intrinsic value)
-- Technical Analysis = "WHEN to buy" (timing, entry/exit points)
-- Combined = 360-degree investment view
-
-## Your Task
-Analyze {symbol} using BOTH approaches:
-- Technical: {technical_period} period
-- Fundamental: {fundamental_period} period
-
-## Available Tools
-Technical (4 tools):
-1. `bollinger_fibonacci_analysis(symbol, period)`
-2. `macd_donchian_analysis(symbol, period)`
-3. `connors_zscore_analysis(symbol, period)`
-4. `dual_moving_average_analysis(symbol, period)`
-
-Fundamental (1 tool):
-5. `fundamental_analysis_report(symbol, period)`
-
-## Code Strategy
-```python
-# Get fundamental data first
-fundamentals = fundamental_analysis_report(symbol="{symbol}", period="{fundamental_period}")
-
-# Get all technical data
-technical = {{
-    "bollinger_fib": bollinger_fibonacci_analysis(symbol="{symbol}", period="{technical_period}"),
-    "macd_donchian": macd_donchian_analysis(symbol="{symbol}", period="{technical_period}"),
-    "connors_zscore": connors_zscore_analysis(symbol="{symbol}", period="{technical_period}"),
-    "dual_ma": dual_moving_average_analysis(symbol="{symbol}", period="{technical_period}"),
-}}
-
-# Analyze alignment between FA and TA
-# ... your synthesis logic ...
-
-final_answer(report)
-```
-
-## Required Report Format
-
-# {symbol} Combined Investment Analysis
-*Analysis Date: [date]*
-
-## Executive Summary
-[Synthesized view combining FA + TA findings]
-
-## Signal Alignment Analysis
-
-| Aspect | Fundamental View | Technical View | Alignment |
-|--------|-----------------|----------------|-----------|
-| Overall | [Bullish/Bearish] | [Bullish/Bearish] | [✅ Aligned / ⚠️ Divergent] |
-| Timing | N/A | [Good/Poor entry] | - |
-| Risk | [Low/Med/High] | [Low/Med/High] | [Match?] |
-
-**Alignment Status**: [ALIGNED / DIVERGENT]
-- If ALIGNED → High conviction opportunity
-- If DIVERGENT → Proceed with caution
-
-## Fundamental Analysis Summary
-[Key financial metrics, strengths, risks]
-
-## Technical Analysis Summary
-[Strategy signals, consensus, key levels]
-
-## Combined Recommendation
-
-### For Long-Term Investors (FA-focused)
-[Recommendation based on fundamentals]
-
-### For Swing Traders (TA-focused)
-[Recommendation based on technicals]
-
-### Optimal Strategy
-[Entry points, position sizing, stop loss]
-
-## Final Verdict: **[STRONG BUY / BUY / HOLD / SELL / STRONG SELL]**
-[Comprehensive rationale combining both perspectives]
-
-*This analysis is for educational purposes only.*
-"""
-
-
-# =============================================================================
-# MODEL AND AGENT BUILDERS
-# =============================================================================
-
-def _resolve_provider(model_id: str, requested_provider: str) -> str:
-    """Determine the actual provider based on model_id pattern."""
-    if requested_provider not in ("auto", ""):
-        return requested_provider
-    # HuggingFace model IDs contain a slash (org/model)
-    return "inference" if "/" in model_id else "litellm"
-
+__all__ = [
+    "DEFAULT_MODEL_ID",
+    "DEFAULT_MODEL_PROVIDER",
+    "DEFAULT_MAX_STEPS",
+    "DEFAULT_EXECUTOR",
+    "build_model",
+    "build_agent",
+    "run_technical_analysis",
+    "run_market_scanner",
+    "run_fundamental_analysis",
+    "run_multi_sector_analysis",
+    "run_combined_analysis",
+]
+
+
+# ===========================================================================
+# Model & Agent Builders
+# ===========================================================================
 
 def build_model(
-    model_id: str,
-    provider: str,
+    model_id: str = DEFAULT_MODEL_ID,
+    provider: str = DEFAULT_MODEL_PROVIDER,
+    api_key: Optional[str] = None,
     hf_token: Optional[str] = None,
-    openai_api_key: Optional[str] = None,
-    openai_base_url: Optional[str] = None,
+    api_base: Optional[str] = None,
 ):
-    """Build the appropriate model based on provider."""
-    resolved = _resolve_provider(model_id, provider)
-    
-    if resolved == "inference":
-        return InferenceClientModel(
-            model_id=model_id,
-            token=hf_token or os.getenv("HF_TOKEN"),
-        )
-    
-    if resolved == "litellm":
-        return LiteLLMModel(
-            model_id=model_id,
-            api_key=openai_api_key or os.getenv("OPENAI_API_KEY"),
-            api_base=openai_base_url or os.getenv("OPENAI_BASE_URL"),
-        )
-    
-    raise ValueError(f"Unsupported provider: {resolved}")
+    """Create the LLM model instance."""
+    if provider == "litellm":
+        kwargs = {"model_id": model_id}
+        if api_key:
+            kwargs["api_key"] = api_key
+        if api_base:
+            kwargs["api_base"] = api_base
+        return LiteLLMModel(**kwargs)
+    else:
+        token = hf_token or os.getenv("HF_TOKEN")
+        return InferenceClientModel(model_id=model_id, token=token)
 
 
 def build_agent(
     model,
     tools: list,
-    max_steps: int = 20,
+    max_steps: int = DEFAULT_MAX_STEPS,
     executor_type: Literal["local", "e2b", "docker"] = "local",
 ):
-    """
-    Build a CodeAgent with the given model and tools.
-    
-    CodeAgent writes Python code to call tools, which is more efficient
-    than JSON-based tool calling for multi-step analysis.
-    
-    Args:
-        model: The LLM model to use
-        tools: List of tools available to the agent
-        max_steps: Maximum reasoning steps
-        executor_type: Code execution environment
-            - "local": Runs in local Python (default, use for development)
-            - "e2b": Runs in E2B sandbox (secure, requires E2B account)
-            - "docker": Runs in Docker container (secure, requires Docker)
-    
-    Returns:
-        CodeAgent instance
-    """
-    # Additional imports the agent might need for analysis
+    """Create a CodeAgent with LOW-LEVEL tools for Python orchestration."""
     additional_imports = [
         "statistics",
         "math",
         "collections",
         "re",
         "datetime",
+        "json",
     ]
     
     agent_kwargs = {
@@ -526,36 +134,442 @@ def build_agent(
     return CodeAgent(**agent_kwargs)
 
 
-# =============================================================================
-# ANALYSIS FUNCTIONS (All LLM-Powered with CodeAgent)
-# =============================================================================
+# ===========================================================================
+# Prompts for LOW-LEVEL Tool Orchestration with Python Code
+# ===========================================================================
+
+TECHNICAL_ANALYSIS_PROMPT = """Analyze {symbol} using all 4 technical strategies.
+
+TOOLS TO CALL:
+1. bollinger_fibonacci_analysis(symbol="{symbol}", period="{period}")
+2. macd_donchian_analysis(symbol="{symbol}", period="{period}")
+3. connors_zscore_analysis(symbol="{symbol}", period="{period}")
+4. dual_moving_average_analysis(symbol="{symbol}", period="{period}")
+
+REQUIRED CODE STRUCTURE:
+```python
+import json
+
+# Call all 4 strategies
+bb_result = bollinger_fibonacci_analysis(symbol="{symbol}", period="{period}")
+macd_result = macd_donchian_analysis(symbol="{symbol}", period="{period}")
+connors_result = connors_zscore_analysis(symbol="{symbol}", period="{period}")
+dual_ma_result = dual_moving_average_analysis(symbol="{symbol}", period="{period}")
+
+# Parse results - each result is a string, may contain JSON or text
+# Extract key metrics: signal, score, return %, win rate, etc.
+
+# Count signals
+buy_count = 0
+sell_count = 0
+hold_count = 0
+
+# Parse each result and extract data
+# Look for patterns like "Signal: BUY", "Return: +5.2%", etc.
+
+# Build detailed report with ACTUAL DATA from results
+# Use markdown tables that render properly
+
+report = f'''
+{symbol} Technical Analysis Report
+Period: {period}
+
+Strategy Performance Comparison
+
+| Strategy | Signal | Score | Strategy Return | vs Buy&Hold | Win Rate |
+|----------|--------|-------|-----------------|-------------|----------|
+| Bollinger-Fib | [extract] | [extract] | [extract]% | [extract]% | [extract]% |
+| MACD-Donchian | [extract] | [extract] | [extract]% | [extract]% | [extract]% |
+| Connors-ZScore | [extract] | [extract] | [extract]% | [extract]% | [extract]% |
+| Dual MA | [extract] | [extract] | [extract]% | [extract]% | [extract]% |
+
+Signal Consensus: X/4 BUY, Y/4 SELL, Z/4 HOLD
+
+Detailed Strategy Analysis
+
+1. Bollinger Bands + Fibonacci
+[Include actual metrics from bb_result: current %B, band position, fib levels, etc.]
+
+2. MACD + Donchian Channel  
+[Include actual metrics from macd_result: MACD value, signal line, channel position, etc.]
+
+3. Connors RSI + Z-Score
+[Include actual metrics from connors_result: RSI value, z-score, percentile, etc.]
+
+4. Dual Moving Average (50/200 EMA)
+[Include actual metrics from dual_ma_result: MA values, crossover status, trend direction, etc.]
+
+Risk Assessment
+- Volatility: [from results]
+- Max Drawdown: [from results]  
+- Sharpe Ratio: [from results]
+
+Recommendation
+Action: [BUY/HOLD/SELL based on consensus]
+Confidence: [based on signal agreement]
+Reasoning: [specific reasons citing the data above]
+'''
+
+final_answer(report)
+```
+
+CRITICAL REQUIREMENTS:
+1. EXTRACT actual numbers from tool results - do not make up data
+2. Use markdown tables with | separators (they render properly)
+3. Include specific metrics: returns, win rates, scores, signal values
+4. Show the raw data that supports your recommendation
+5. Do NOT use uppercase section headers - use normal case with line breaks
+
+Write complete code that parses the tool outputs and builds a data-rich report.
+"""
+
+MARKET_SCANNER_PROMPT = """Scan and compare these stocks: {symbols}
+
+TOOLS TO CALL (for each stock):
+1. bollinger_fibonacci_analysis(symbol, period)
+2. macd_donchian_analysis(symbol, period)
+3. connors_zscore_analysis(symbol, period)
+4. dual_moving_average_analysis(symbol, period)
+
+REQUIRED CODE STRUCTURE:
+```python
+import json
+import re
+
+stocks = {symbol_list}
+period = "{period}"
+
+# Collect all results
+all_data = {{}}
+for stock in stocks:
+    all_data[stock] = {{
+        "bb": bollinger_fibonacci_analysis(symbol=stock, period=period),
+        "macd": macd_donchian_analysis(symbol=stock, period=period),
+        "connors": connors_zscore_analysis(symbol=stock, period=period),
+        "dual_ma": dual_moving_average_analysis(symbol=stock, period=period),
+    }}
+
+# Parse results and extract metrics for each stock
+# Look for: Signal (BUY/SELL/HOLD), Return %, Score, Win Rate
+# Build a summary dict for each stock
+
+stock_summaries = {{}}
+for stock, results in all_data.items():
+    # Parse each strategy result to extract signal and metrics
+    # Count buy/sell/hold signals
+    # Calculate average score or opportunity metric
+    stock_summaries[stock] = {{
+        "signals": [extracted_signals],
+        "buy_count": X,
+        "avg_return": Y,
+        "score": Z,
+    }}
+
+# Rank stocks by opportunity (buy signals, returns, etc.)
+ranked = sorted(stock_summaries.items(), key=lambda x: x[1]["buy_count"], reverse=True)
+
+# Build report with ACTUAL DATA
+report = f'''
+Market Scanner Results
+Stocks: {{", ".join(stocks)}} | Period: {{period}}
+
+Rankings by Technical Opportunity
+
+| Rank | Symbol | Buy Signals | Avg Return | Score | Recommendation |
+|------|--------|-------------|------------|-------|----------------|
+'''
+
+for i, (stock, data) in enumerate(ranked, 1):
+    report += f"| {{i}} | {{stock}} | {{data['buy_count']}}/4 | {{data['avg_return']}}% | {{data['score']}} | [rec] |\\n"
+
+report += '''
+
+Individual Stock Analysis
+'''
+
+for stock in stocks:
+    results = all_data[stock]
+    report += f'''
+{stock}:
+
+| Strategy | Signal | Return | Key Metric |
+|----------|--------|--------|------------|
+| Bollinger-Fib | [from bb] | [%] | [score/level] |
+| MACD-Donchian | [from macd] | [%] | [MACD value] |
+| Connors-ZScore | [from connors] | [%] | [RSI/ZScore] |
+| Dual MA | [from dual_ma] | [%] | [trend] |
+
+'''
+
+report += '''
+Market Assessment
+[Based on the actual data above, summarize market conditions]
+
+Top Picks: [list best opportunities with reasoning based on data]
+'''
+
+final_answer(report)
+```
+
+CRITICAL REQUIREMENTS:
+1. EXTRACT actual data from each tool result - parse the strings for numbers
+2. Use markdown tables with proper | formatting
+3. Show individual stock breakdowns with real metrics
+4. Rank based on actual signals and returns, not made-up scores
+5. Use normal case headers (not UPPERCASE)
+
+Write complete code that extracts real data and builds an informative comparison.
+"""
+
+FUNDAMENTAL_ANALYSIS_PROMPT = """Analyze {symbol} fundamentals.
+
+TOOL TO CALL:
+fundamental_analysis_report(symbol="{symbol}", period="{period}")
+
+REQUIRED CODE:
+```python
+# Get fundamental analysis
+fund_data = fundamental_analysis_report(symbol="{symbol}", period="{period}")
+
+# The tool returns detailed financial data
+# Present it clearly with proper formatting
+
+report = f'''
+{symbol} Fundamental Analysis
+Period: {period}
+
+Financial Overview:
+{{fund_data}}
+
+Investment Assessment:
+Based on the financial metrics above, here is my assessment:
+[Your interpretation of the key metrics - profitability, growth, debt, valuation]
+
+Key Strengths:
+- [Based on actual data above]
+
+Key Risks:
+- [Based on actual data above]
+
+Recommendation:
+[Your recommendation with specific references to the metrics]
+'''
+
+final_answer(report)
+```
+
+Present the fundamental data clearly. The tool already provides structured output - display it properly.
+"""
+
+MULTI_SECTOR_PROMPT = """Analyze multiple sectors and compare them.
+
+SECTORS:
+{sector_details}
+
+TOOLS (call for each stock in each sector):
+1. bollinger_fibonacci_analysis(symbol, period)
+2. macd_donchian_analysis(symbol, period)
+3. connors_zscore_analysis(symbol, period)
+4. dual_moving_average_analysis(symbol, period)
+
+REQUIRED CODE:
+```python
+import json
+import re
+
+sectors = {sectors_dict}
+period = "{period}"
+
+# Collect data for all stocks in all sectors
+all_data = {{}}
+sector_scores = {{}}
+
+for sector_name, symbols_str in sectors.items():
+    stock_list = [s.strip() for s in symbols_str.split(",")]
+    all_data[sector_name] = {{}}
+    
+    for stock in stock_list:
+        all_data[sector_name][stock] = {{
+            "bb": bollinger_fibonacci_analysis(symbol=stock, period=period),
+            "macd": macd_donchian_analysis(symbol=stock, period=period),
+            "connors": connors_zscore_analysis(symbol=stock, period=period),
+            "dual_ma": dual_moving_average_analysis(symbol=stock, period=period),
+        }}
+    
+    # Calculate sector average metrics
+    # Parse results and compute buy signal counts, average returns, etc.
+
+# Build detailed report
+report = '''
+Multi-Sector Analysis Report
+Period: ''' + period + '''
+
+Sector Comparison Summary
+
+| Sector | Stocks | Avg Buy Signals | Best Stock | Sector Outlook |
+|--------|--------|-----------------|------------|----------------|
+'''
+
+for sector_name in sectors.keys():
+    # Add row with actual data from parsing
+    report += f"| {{sector_name}} | [count] | [X/4] | [best] | [outlook] |\\n"
+
+report += '''
+
+Detailed Sector Analysis
+'''
+
+for sector_name, stocks_data in all_data.items():
+    report += f'''
+--- {{sector_name}} ---
+
+| Stock | BB-Fib | MACD | Connors | DualMA | Consensus |
+|-------|--------|------|---------|--------|-----------|
+'''
+    for stock, results in stocks_data.items():
+        # Extract signals from each result
+        report += f"| {{stock}} | [sig] | [sig] | [sig] | [sig] | [X/4] |\\n"
+
+report += '''
+
+Cross-Sector Recommendations
+
+Top Picks Overall:
+1. [Stock] (Sector) - [reasoning with data]
+2. [Stock] (Sector) - [reasoning with data]
+3. [Stock] (Sector) - [reasoning with data]
+
+Portfolio Allocation Suggestion:
+[Based on sector strength analysis]
+'''
+
+final_answer(report)
+```
+
+REQUIREMENTS:
+1. Parse actual data from tool results
+2. Use markdown tables for readability
+3. Show per-stock breakdown within each sector
+4. Rank and recommend based on real metrics
+"""
+
+COMBINED_ANALYSIS_PROMPT = """Perform complete Technical + Fundamental analysis of {symbol}.
+
+TOOLS TO CALL:
+
+Technical (all 4):
+1. bollinger_fibonacci_analysis(symbol="{symbol}", period="{technical_period}")
+2. macd_donchian_analysis(symbol="{symbol}", period="{technical_period}")
+3. connors_zscore_analysis(symbol="{symbol}", period="{technical_period}")
+4. dual_moving_average_analysis(symbol="{symbol}", period="{technical_period}")
+
+Fundamental:
+5. fundamental_analysis_report(symbol="{symbol}", period="{fundamental_period}")
+
+REQUIRED CODE:
+```python
+import json
+import re
+
+symbol = "{symbol}"
+
+# Get all technical analysis
+bb_result = bollinger_fibonacci_analysis(symbol=symbol, period="{technical_period}")
+macd_result = macd_donchian_analysis(symbol=symbol, period="{technical_period}")
+connors_result = connors_zscore_analysis(symbol=symbol, period="{technical_period}")
+dual_ma_result = dual_moving_average_analysis(symbol=symbol, period="{technical_period}")
+
+# Get fundamental analysis
+fund_result = fundamental_analysis_report(symbol=symbol, period="{fundamental_period}")
+
+# Parse technical results to extract signals and metrics
+# Count buy/sell/hold signals for consensus
+
+# Build comprehensive report
+report = f'''
+{{symbol}} Combined Analysis Report
+Technical Period: {technical_period} | Fundamental Period: {fundamental_period}
+
+Technical Analysis Summary
+
+| Strategy | Signal | Return vs B&H | Key Metric |
+|----------|--------|---------------|------------|
+| Bollinger-Fibonacci | [extract] | [extract]% | [score] |
+| MACD-Donchian | [extract] | [extract]% | [MACD val] |
+| Connors-ZScore | [extract] | [extract]% | [RSI/Z] |
+| Dual Moving Avg | [extract] | [extract]% | [trend] |
+
+Technical Consensus: X/4 bullish signals
+
+Fundamental Analysis Summary
+
+{{fund_result}}
+
+Alignment Analysis
+
+Technical View: [bullish/bearish/neutral based on signals]
+Fundamental View: [bullish/bearish/neutral based on metrics]
+Alignment: [ALIGNED / DIVERGENT]
+
+If divergent, explain: [technicals say X but fundamentals say Y because...]
+
+Final Recommendation
+
+| Aspect | Assessment |
+|--------|------------|
+| Action | [BUY / HOLD / SELL] |
+| Confidence | [HIGH / MEDIUM / LOW] |
+| Time Horizon | [short/medium/long term] |
+| Key Catalyst | [what would confirm or invalidate] |
+
+Reasoning:
+[2-3 sentences synthesizing both technical and fundamental views with specific data references]
+'''
+
+final_answer(report)
+```
+
+REQUIREMENTS:
+1. Extract actual metrics from all 5 tool results
+2. Use markdown tables for clear presentation
+3. Explicitly analyze whether technical and fundamental views align
+4. Provide specific, data-backed reasoning for recommendation
+"""
+
+
+# ===========================================================================
+# Analysis Functions (Using LOW-LEVEL Tools with Code)
+# ===========================================================================
 
 def run_technical_analysis(
     symbol: str,
     period: str = "1y",
     model_id: str = DEFAULT_MODEL_ID,
     model_provider: str = DEFAULT_MODEL_PROVIDER,
-    hf_token: Optional[str] = None,
     openai_api_key: Optional[str] = None,
+    hf_token: Optional[str] = None,
     openai_base_url: Optional[str] = None,
     max_steps: int = DEFAULT_MAX_STEPS,
-    executor_type: str = DEFAULT_EXECUTOR,
+    executor_type: Literal["local", "e2b", "docker"] = "local",
 ) -> str:
     """
-    Run comprehensive technical analysis on a single stock using CodeAgent.
+    Run technical analysis using 4 individual strategy tools.
     
-    The CodeAgent will write Python code to:
-    1. Call all 4 strategy tools efficiently
-    2. Parse and analyze results
-    3. Generate a comprehensive markdown report
+    CodeAgent approach: LLM writes Python code to call and combine all 4 tools.
     """
-    model = build_model(model_id, model_provider, hf_token, openai_api_key, openai_base_url)
-    agent = build_agent(model, STRATEGY_TOOLS, max_steps, executor_type)
+    configure_finance_tools()
     
-    prompt = TECHNICAL_ANALYSIS_PROMPT.format(
-        symbol=symbol.upper(),
-        period=period,
+    model = build_model(
+        model_id=model_id,
+        provider=model_provider,
+        api_key=openai_api_key,
+        hf_token=hf_token,
+        api_base=openai_base_url,
     )
+    
+    agent = build_agent(model, LOW_LEVEL_TOOLS, max_steps=max_steps, executor_type=executor_type)
+    
+    prompt = TECHNICAL_ANALYSIS_PROMPT.format(symbol=symbol, period=period)
     
     return agent.run(prompt)
 
@@ -565,34 +579,35 @@ def run_market_scanner(
     period: str = "1y",
     model_id: str = DEFAULT_MODEL_ID,
     model_provider: str = DEFAULT_MODEL_PROVIDER,
-    hf_token: Optional[str] = None,
     openai_api_key: Optional[str] = None,
+    hf_token: Optional[str] = None,
     openai_base_url: Optional[str] = None,
-    max_steps: int = 30,
-    executor_type: str = DEFAULT_EXECUTOR,
+    max_steps: int = 30,  # More steps for loops
+    executor_type: Literal["local", "e2b", "docker"] = "local",
 ) -> str:
     """
-    Scan multiple stocks using CodeAgent with efficient looping.
+    Run market scanner using loops over individual strategy tools.
     
-    CodeAgent advantage: Can write a for-loop to process all stocks
-    in fewer LLM calls compared to ToolCallingAgent.
+    CodeAgent approach: LLM writes Python loops to iterate over stocks and strategies.
     """
-    model = build_model(model_id, model_provider, hf_token, openai_api_key, openai_base_url)
+    configure_finance_tools()
     
-    # Clean up symbols string
-    if isinstance(symbols, list):
-        symbols = ",".join(symbols)
-    symbols_clean = symbols.replace(" ", "").upper()
+    model = build_model(
+        model_id=model_id,
+        provider=model_provider,
+        api_key=openai_api_key,
+        hf_token=hf_token,
+        api_base=openai_base_url,
+    )
     
-    # Calculate steps needed (CodeAgent is more efficient)
-    symbol_list = [s.strip() for s in symbols_clean.split(",") if s.strip()]
-    # CodeAgent can batch calls in loops, so fewer steps needed
-    adjusted_max_steps = max(max_steps, len(symbol_list) * 2 + 10)
+    agent = build_agent(model, LOW_LEVEL_TOOLS, max_steps=max_steps, executor_type=executor_type)
     
-    agent = build_agent(model, STRATEGY_TOOLS, adjusted_max_steps, executor_type)
+    # Parse symbols for the prompt
+    symbol_list = [s.strip() for s in symbols.split(",")]
     
     prompt = MARKET_SCANNER_PROMPT.format(
-        symbols=symbols_clean,
+        symbols=symbols,
+        symbol_list=symbol_list,
         period=period,
     )
     
@@ -604,79 +619,72 @@ def run_fundamental_analysis(
     period: str = "3y",
     model_id: str = DEFAULT_MODEL_ID,
     model_provider: str = DEFAULT_MODEL_PROVIDER,
-    hf_token: Optional[str] = None,
     openai_api_key: Optional[str] = None,
+    hf_token: Optional[str] = None,
     openai_base_url: Optional[str] = None,
     max_steps: int = DEFAULT_MAX_STEPS,
-    executor_type: str = DEFAULT_EXECUTOR,
+    executor_type: Literal["local", "e2b", "docker"] = "local",
 ) -> str:
     """
-    Run fundamental analysis on a stock's financial statements using CodeAgent.
-    """
-    model = build_model(model_id, model_provider, hf_token, openai_api_key, openai_base_url)
-    agent = build_agent(model, [fundamental_analysis_report], max_steps, executor_type)
+    Run fundamental analysis using fundamental_analysis_report tool.
     
-    prompt = FUNDAMENTAL_ANALYSIS_PROMPT.format(
-        symbol=symbol.upper(),
-        period=period,
+    CodeAgent approach: Simple single tool call with interpretation.
+    """
+    configure_finance_tools()
+    
+    model = build_model(
+        model_id=model_id,
+        provider=model_provider,
+        api_key=openai_api_key,
+        hf_token=hf_token,
+        api_base=openai_base_url,
     )
+    
+    agent = build_agent(model, LOW_LEVEL_TOOLS, max_steps=max_steps, executor_type=executor_type)
+    
+    prompt = FUNDAMENTAL_ANALYSIS_PROMPT.format(symbol=symbol, period=period)
     
     return agent.run(prompt)
 
 
 def run_multi_sector_analysis(
-    sectors: dict,
+    sectors: Dict[str, str],
     period: str = "1y",
     model_id: str = DEFAULT_MODEL_ID,
     model_provider: str = DEFAULT_MODEL_PROVIDER,
-    hf_token: Optional[str] = None,
     openai_api_key: Optional[str] = None,
+    hf_token: Optional[str] = None,
     openai_base_url: Optional[str] = None,
-    max_steps: int = 50,
-    executor_type: str = DEFAULT_EXECUTOR,
+    max_steps: int = 50,  # Many steps for nested loops
+    executor_type: Literal["local", "e2b", "docker"] = "local",
 ) -> str:
     """
-    Run comprehensive multi-sector analysis using CodeAgent.
+    Run multi-sector analysis using nested loops over tools.
     
-    CodeAgent advantage: Can use nested loops to efficiently process
-    all stocks across all sectors with fewer LLM reasoning steps.
+    CodeAgent approach: LLM writes nested loops (sector -> stock -> strategy).
     """
-    model = build_model(model_id, model_provider, hf_token, openai_api_key, openai_base_url)
+    configure_finance_tools()
     
-    # Calculate totals
-    sector_count = len(sectors)
-    total_stocks = 0
-    sectors_formatted_lines = []
-    sectors_dict_lines = []
+    model = build_model(
+        model_id=model_id,
+        provider=model_provider,
+        api_key=openai_api_key,
+        hf_token=hf_token,
+        api_base=openai_base_url,
+    )
     
-    for sector_name, symbols in sectors.items():
-        if isinstance(symbols, list):
-            symbol_list = symbols
-        else:
-            symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
-        
-        total_stocks += len(symbol_list)
-        symbols_str = ", ".join(symbol_list)
-        sectors_formatted_lines.append(f"**{sector_name}**: {symbols_str}")
-        
-        # Build Python dict representation for the prompt
-        symbols_py = ", ".join([f'"{s}"' for s in symbol_list])
-        sectors_dict_lines.append(f'    "{sector_name}": [{symbols_py}],')
+    agent = build_agent(model, LOW_LEVEL_TOOLS, max_steps=max_steps, executor_type=executor_type)
     
-    sectors_formatted = "\n".join(sectors_formatted_lines)
-    sectors_dict = "\n".join(sectors_dict_lines)
+    # Format for prompt
+    sector_details = "\n".join([
+        f"- **{name}**: {symbols}"
+        for name, symbols in sectors.items()
+    ])
     
-    # CodeAgent needs fewer steps due to efficient looping
-    adjusted_max_steps = max(max_steps, total_stocks + 15)
-    
-    agent = build_agent(model, STRATEGY_TOOLS, adjusted_max_steps, executor_type)
-    
-    prompt = MULTI_SECTOR_ANALYSIS_PROMPT.format(
-        sectors_formatted=sectors_formatted,
-        sectors_dict=sectors_dict,
+    prompt = MULTI_SECTOR_PROMPT.format(
+        sector_details=sector_details,
+        sectors_dict=sectors,
         period=period,
-        sector_count=sector_count,
-        total_stocks=total_stocks,
     )
     
     return agent.run(prompt)
@@ -688,27 +696,31 @@ def run_combined_analysis(
     fundamental_period: str = "3y",
     model_id: str = DEFAULT_MODEL_ID,
     model_provider: str = DEFAULT_MODEL_PROVIDER,
-    hf_token: Optional[str] = None,
     openai_api_key: Optional[str] = None,
+    hf_token: Optional[str] = None,
     openai_base_url: Optional[str] = None,
     max_steps: int = 25,
-    executor_type: str = DEFAULT_EXECUTOR,
+    executor_type: Literal["local", "e2b", "docker"] = "local",
 ) -> str:
     """
-    Run combined Technical + Fundamental analysis using CodeAgent.
+    Run combined technical + fundamental analysis.
     
-    CodeAgent can efficiently call all 5 tools and synthesize results
-    in a single code execution block.
+    CodeAgent approach: LLM writes code to call all 5 tools and synthesize.
     """
-    model = build_model(model_id, model_provider, hf_token, openai_api_key, openai_base_url)
+    configure_finance_tools()
     
-    # Include both strategy tools and fundamental tool
-    combined_tools = STRATEGY_TOOLS + [fundamental_analysis_report]
+    model = build_model(
+        model_id=model_id,
+        provider=model_provider,
+        api_key=openai_api_key,
+        hf_token=hf_token,
+        api_base=openai_base_url,
+    )
     
-    agent = build_agent(model, combined_tools, max_steps, executor_type)
+    agent = build_agent(model, LOW_LEVEL_TOOLS, max_steps=max_steps, executor_type=executor_type)
     
     prompt = COMBINED_ANALYSIS_PROMPT.format(
-        symbol=symbol.upper(),
+        symbol=symbol,
         technical_period=technical_period,
         fundamental_period=fundamental_period,
     )
@@ -716,75 +728,28 @@ def run_combined_analysis(
     return agent.run(prompt)
 
 
-# =============================================================================
-# LEGACY SUPPORT
-# =============================================================================
+# ===========================================================================
+# CLI Entry Point
+# ===========================================================================
 
-def run_agent(
-    symbol: str,
-    period: str,
-    model_id: str,
-    hf_token: Optional[str],
-    model_provider: str,
-    openai_api_key: Optional[str],
-    openai_base_url: Optional[str],
-    max_steps: int,
-    stream: bool,
-    verbosity: int,
-) -> str:
-    """Legacy function for backward compatibility."""
-    return run_technical_analysis(
-        symbol=symbol,
-        period=period,
-        model_id=model_id,
-        model_provider=model_provider,
-        hf_token=hf_token,
-        openai_api_key=openai_api_key,
-        openai_base_url=openai_base_url,
-        max_steps=max_steps,
-    )
-
-
-# =============================================================================
-# CLI ENTRY POINT
-# =============================================================================
-
-def main() -> int:
-    """Command-line entry point."""
-    import argparse
-    
+def main():
+    """CLI entry point for CodeAgent analysis."""
     parser = argparse.ArgumentParser(
-        description="Run LLM-powered stock analysis using CodeAgent + MCP finance tools.",
+        description="CodeAgent Stock Analysis (LOW-LEVEL tools with Python orchestration)"
     )
-    parser.add_argument("symbol", help="Ticker symbol(s) to analyze")
-    parser.add_argument(
-        "--mode",
-        choices=["technical", "scanner", "fundamental", "combined"],
-        default="technical",
-        help="Analysis mode (default: technical)",
-    )
-    parser.add_argument("--period", default="1y", help="Historical period (default: 1y)")
-    parser.add_argument("--model-id", default=DEFAULT_MODEL_ID, help="Model identifier")
-    parser.add_argument("--model-provider", default=DEFAULT_MODEL_PROVIDER, help="Provider")
-    parser.add_argument("--max-steps", type=int, default=DEFAULT_MAX_STEPS, help="Max agent steps")
-    parser.add_argument(
-        "--executor",
-        choices=["local", "e2b", "docker"],
-        default=DEFAULT_EXECUTOR,
-        help="Code execution environment (default: local)",
-    )
-    parser.add_argument("--output", type=Path, help="Save report to file")
+    parser.add_argument("symbol", help="Stock symbol or comma-separated symbols")
+    parser.add_argument("--mode", choices=["technical", "scanner", "fundamental", "combined"],
+                        default="technical", help="Analysis mode")
+    parser.add_argument("--period", default="1y", help="Analysis period")
+    parser.add_argument("--model-id", default=DEFAULT_MODEL_ID)
+    parser.add_argument("--model-provider", default=DEFAULT_MODEL_PROVIDER)
+    parser.add_argument("--max-steps", type=int, default=DEFAULT_MAX_STEPS)
+    parser.add_argument("--executor", choices=["local", "e2b", "docker"],
+                        default=DEFAULT_EXECUTOR, help="Code execution environment")
     
     args = parser.parse_args()
     
-    print(f"🤖 Using CodeAgent with {args.executor} executor")
-    print(f"📊 Model: {args.model_id}")
-    print(f"🔧 Mode: {args.mode}")
-    print()
-    
     try:
-        configure_finance_tools()
-        
         if args.mode == "technical":
             result = run_technical_analysis(
                 symbol=args.symbol,
@@ -815,29 +780,18 @@ def main() -> int:
         elif args.mode == "combined":
             result = run_combined_analysis(
                 symbol=args.symbol,
+                technical_period=args.period,
                 model_id=args.model_id,
                 model_provider=args.model_provider,
                 max_steps=args.max_steps,
                 executor_type=args.executor,
             )
-        else:
-            print(f"Unknown mode: {args.mode}")
-            return 1
-            
-    except KeyboardInterrupt:
-        print("\nAnalysis interrupted.")
-        return 1
+        
+        print(result)
+        
     finally:
         shutdown_finance_tools()
-    
-    if args.output:
-        args.output.write_text(result, encoding="utf-8")
-        print(f"Report saved to {args.output}")
-    else:
-        print(result)
-    
-    return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

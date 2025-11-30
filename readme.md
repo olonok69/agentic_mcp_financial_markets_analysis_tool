@@ -39,23 +39,166 @@ This Application: "AAPL shows oversold conditions with RSI at 28.5, suggesting
 
 ---
 
-## 🏗️ Architecture
+## 🤖 Two Agent Architectures
 
-### System Components
+This application supports **two different AI agent types**, each with distinct advantages:
+
+### 🔧 ToolCallingAgent (Original)
+
+The traditional approach where the LLM outputs JSON to call tools one at a time.
 
 <p align="center">
-  <img src="docs/architecture.svg" alt="System Architecture" width="900">
+  <img src="docs/architecture.svg" alt="ToolCallingAgent Architecture" width="900">
 </p>
 
-**Data Flow Summary:**
-1. **Streamlit** → User interacts with web interface (5 analysis tabs)
-2. **FastAPI** → REST API receives requests, validates input
-3. **smolagents** → AI agent decides which tools to call
-4. **LLM API** → OpenAI/HuggingFace processes prompts, guides tool selection
-5. **MCP Client** → Bridges smolagents to MCP server via stdio
-6. **MCP Server** → Executes financial analysis tools
-7. **Strategies** → Calculate technical indicators, run backtests
-8. **Yahoo Finance** → Provides market data
+### 🐍 CodeAgent (New - Recommended)
+
+The advanced approach where the LLM writes Python code to call tools, enabling loops and variables.
+
+<p align="center">
+  <img src="docs/architecture_codeagent.svg" alt="CodeAgent Architecture" width="900">
+</p>
+
+---
+
+## ⚖️ Agent Comparison: ToolCallingAgent vs CodeAgent
+
+### How They Work
+
+| Aspect | 🔧 ToolCallingAgent | 🐍 CodeAgent |
+|--------|---------------------|--------------|
+| **Output Format** | JSON tool calls | Python code |
+| **Tool Invocation** | `{"tool": "analyze", "args": {...}}` | `result = analyze(symbol="AAPL")` |
+| **Multi-tool** | One call per LLM round | Can batch with loops |
+| **Variables** | ❌ Cannot store results | ✅ Can use variables |
+| **Loops** | ❌ Not supported | ✅ `for stock in stocks:` |
+| **Conditionals** | ❌ Not supported | ✅ `if signal == "BUY":` |
+
+### Example: Analyzing 5 Stocks
+
+**ToolCallingAgent Approach:**
+```
+Round 1: LLM → "Call analyze(AAPL)" → Result
+Round 2: LLM → "Call analyze(MSFT)" → Result  
+Round 3: LLM → "Call analyze(GOOGL)" → Result
+Round 4: LLM → "Call analyze(META)" → Result
+Round 5: LLM → "Call analyze(NVDA)" → Result
+Round 6: LLM → Synthesize all results → Report
+
+Total: 6 LLM calls
+```
+
+**CodeAgent Approach:**
+```python
+# LLM generates this code in ONE round:
+results = {}
+for stock in ["AAPL", "MSFT", "GOOGL", "META", "NVDA"]:
+    results[stock] = analyze(symbol=stock, period="1y")
+
+# Calculate consensus
+buy_signals = sum(1 for r in results.values() if "BUY" in r)
+report = f"Consensus: {buy_signals}/5 stocks show BUY signals..."
+
+final_answer(report)
+
+Total: 1-2 LLM calls
+```
+
+### Performance Comparison
+
+| Scenario | ToolCallingAgent | CodeAgent | Improvement |
+|----------|-----------------|-----------|-------------|
+| 1 stock, 4 tools | ~45 seconds | ~40 seconds | ~10% faster |
+| 5 stocks, 4 tools each | ~3 minutes | ~1.5 minutes | ~50% faster |
+| 3 sectors, 30 stocks | ~15 minutes | ~5 minutes | ~66% faster |
+
+### Pros and Cons
+
+#### 🔧 ToolCallingAgent
+
+| ✅ Pros | ❌ Cons |
+|---------|---------|
+| Simple and predictable | One tool call per LLM round |
+| No code execution risks | More LLM API calls = higher cost |
+| Easier to debug | Slower for multi-stock analysis |
+| Works with any LLM | Cannot compose complex logic |
+| Battle-tested approach | Limited to sequential execution |
+
+**Best For:**
+- Single stock analysis
+- Simple queries
+- Production environments with strict security
+- LLMs with weaker code generation
+
+#### 🐍 CodeAgent
+
+| ✅ Pros | ❌ Cons |
+|---------|---------|
+| Efficient loops for multi-stock | Requires code execution sandbox |
+| Fewer LLM calls = lower cost | More complex to debug |
+| Can store and reuse results | Needs LLM with good Python skills |
+| Natural code-based reasoning | Security considerations |
+| Better for complex analysis | May generate invalid code |
+
+**Best For:**
+- Multi-stock scanning
+- Multi-sector analysis
+- Complex comparative analysis
+- Development environments
+- Cost-conscious usage
+
+### Security Considerations
+
+| Executor | Security Level | Use Case |
+|----------|---------------|----------|
+| `local` | ⚠️ Low | Development only |
+| `e2b` | ✅ High | Production (cloud sandbox) |
+| `docker` | ✅ High | Production (self-hosted) |
+
+```python
+# Development (local execution)
+agent = CodeAgent(tools=tools, model=model, executor_type="local")
+
+# Production (E2B sandbox)
+agent = CodeAgent(tools=tools, model=model, executor_type="e2b")
+
+# Production (Docker sandbox)
+agent = CodeAgent(tools=tools, model=model, executor_type="docker")
+```
+
+### When to Use Which
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    DECISION FLOWCHART                           │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Analyzing single stock?                                        │
+│      │                                                          │
+│      ├── YES → Either agent works fine                          │
+│      │                                                          │
+│      └── NO (multiple stocks)                                   │
+│              │                                                  │
+│              └── Use CodeAgent (2-3x faster)                    │
+│                                                                 │
+│  Production environment?                                        │
+│      │                                                          │
+│      ├── YES + Security critical → ToolCallingAgent             │
+│      │                                                          │
+│      ├── YES + Performance critical → CodeAgent + e2b/docker    │
+│      │                                                          │
+│      └── NO (development) → CodeAgent + local                   │
+│                                                                 │
+│  LLM has weak Python skills?                                    │
+│      │                                                          │
+│      └── YES → ToolCallingAgent (more reliable)                 │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🏗️ Architecture Overview
 
 ### Folder Structure
 
@@ -79,11 +222,17 @@ mcp_financial_markets_analysis_tool/
 │
 ├── stock_analyzer_bot/              # Smolagents Bot (AI Orchestration)
 │   ├── __init__.py
-│   ├── main.py                      # Analysis functions & LLM prompts
+│   ├── main.py                      # ToolCallingAgent implementation
+│   ├── main_codeagent.py            # CodeAgent implementation (NEW)
 │   ├── api.py                       # FastAPI REST endpoints
 │   ├── tools.py                     # Smolagents tool wrappers
 │   ├── mcp_client.py                # MCP connection manager
 │   └── README.md                    # 📚 Detailed Bot Documentation
+│
+├── docs/
+│   ├── architecture.svg             # ToolCallingAgent diagram
+│   ├── architecture_codeagent.svg   # CodeAgent diagram (NEW)
+│   └── SECTORS_REFERENCE.md         # Sector symbols reference
 │
 ├── streamlit_app.py                 # Web UI (5 Analysis Tabs)
 ├── .env                             # Environment variables
@@ -91,175 +240,71 @@ mcp_financial_markets_analysis_tool/
 └── README.md                        # 📚 This file
 ```
 
+### Data Flow Summary
+
+Both agent types follow the same high-level flow:
+
+1. **Streamlit** → User interacts with web interface
+2. **FastAPI** → REST API receives requests, selects agent type
+3. **Agent** → ToolCallingAgent OR CodeAgent processes request
+4. **LLM API** → OpenAI/HuggingFace guides tool selection
+5. **MCP Client** → Bridges agent to MCP server
+6. **MCP Server** → Executes financial analysis tools
+7. **Strategies** → Calculate technical indicators
+8. **Yahoo Finance** → Provides market data
+
 ---
 
 ## 🤖 Understanding Smolagents
 
 ### What is Smolagents?
 
-[**Smolagents**](https://huggingface.co/docs/smolagents/index) is an open-source Python library from Hugging Face that makes it easy to build AI agents that can use tools. It's the "brain" of our application.
+[**Smolagents**](https://huggingface.co/docs/smolagents/index) is an open-source Python library from Hugging Face that makes it easy to build AI agents that can use tools.
 
 > *"smolagents is designed to make it extremely easy to build and run agents using just a few lines of code."* - HuggingFace
 
-### Key Smolagents Features We Use
+### Why CodeAgent is Recommended
 
-| Feature | How We Use It |
-|---------|---------------|
-| **ToolCallingAgent** | Orchestrates calls to our 7 financial tools |
-| **LiteLLMModel** | Connects to OpenAI (gpt-4o, gpt-4-turbo) |
-| **InferenceClientModel** | Connects to HuggingFace models |
-| **@tool decorator** | Wraps our MCP tools for agent use |
-| **Multi-step reasoning** | Agent decides which tools to call and in what order |
+According to [HuggingFace research](https://huggingface.co/docs/smolagents/tutorials/secure_code_execution):
 
-### How Smolagents Works in Our App
+> *"Multiple research papers have shown that having the LLM write its actions in code is much better than the current standard format for tool calling, which is different shades of writing actions as a JSON."*
 
-```python
-# 1. Define tools that the agent can use
-from smolagents import tool
-
-@tool
-def bollinger_fibonacci_analysis(symbol: str, period: str = "1y") -> str:
-    """Analyze stock using Bollinger Bands + Fibonacci retracement."""
-    # Calls MCP server, returns analysis data
-    return _call_mcp_tool("analyze_bollinger_fibonacci_performance", {...})
-
-# 2. Create an agent with the LLM and tools
-from smolagents import ToolCallingAgent, LiteLLMModel
-
-model = LiteLLMModel(model_id="gpt-4o")
-agent = ToolCallingAgent(
-    tools=[bollinger_fibonacci_analysis, macd_donchian_analysis, ...],
-    model=model,
-    max_steps=25,
-)
-
-# 3. Run the agent with a prompt
-report = agent.run("""
-    Analyze AAPL stock using all 4 technical strategies.
-    Create a comprehensive markdown report with recommendations.
-""")
-```
-
-### The Agent's Decision Process
-
-When you ask for analysis, the agent:
-
-```
-1. READS the prompt: "Analyze AAPL with 4 strategies"
-   
-2. PLANS: "I need to call 4 tools: bollinger_fibonacci, macd_donchian, 
-          connors_zscore, dual_moving_average"
-   
-3. EXECUTES: Calls each tool, receives data
-   
-4. SYNTHESIZES: Combines all results, identifies patterns
-   
-5. GENERATES: Creates professional markdown report with recommendation
-```
-
-This is why results are **interpreted**, not just displayed.
+**Code is better because:**
+- **Composability**: Nest functions, use loops, create reusable logic
+- **Object Management**: Store outputs in variables for later use
+- **Generality**: Express any computation, not just tool calls
+- **Training Data**: LLMs have seen lots of Python code in training
 
 ---
 
-## 📱 Streamlit Interface - 5 Analysis Types
+## 📱 Streamlit Interface
 
-### Tab 1: 📈 Technical Analysis
+### Agent Selection Toggle
 
-**Purpose:** Deep dive into a single stock using 4 trading strategies
+The sidebar now includes an agent type selector:
 
-**What It Does:**
-- Calls 4 strategy tools for one stock
-- Each strategy provides: signal, score, return %, Sharpe ratio, max drawdown
-- AI synthesizes into cohesive report with recommendation
-
-**Strategies Used:**
-1. **Bollinger-Fibonacci** - Support/resistance with volatility bands
-2. **MACD-Donchian** - Momentum with breakout detection
-3. **Connors RSI + Z-Score** - Mean reversion signals
-4. **Dual Moving Average** - Trend following (Golden/Death Cross)
-
-**Best For:** "Should I buy/sell/hold this specific stock?"
-
----
-
-### Tab 2: 🔍 Market Scanner
-
-**Purpose:** Compare multiple stocks and rank opportunities
-
-**What It Does:**
-- Runs all 4 strategies on each stock in your list
-- Compares performance across stocks
-- Ranks from best to worst opportunity
-- Identifies consensus picks
-
-**Example Input:** `AAPL, MSFT, GOOGL, META, NVDA, AMD`
-
-**Best For:** "Which stock in this group is the best opportunity?"
-
----
-
-### Tab 3: 📊 Fundamental Analysis
-
-**Purpose:** Analyze company financial health from statements
-
-**What It Does:**
-- Retrieves income statement, balance sheet, cash flow
-- Calculates key ratios: P/E, ROE, debt-to-equity, margins
-- AI interprets financial health
-- Creates investment thesis
-
-**Metrics Analyzed:**
-- **Profitability:** Revenue, Net Income, Margins
-- **Growth:** Revenue growth, earnings growth
-- **Liquidity:** Current ratio, quick ratio
-- **Leverage:** Debt ratios, interest coverage
-- **Returns:** ROE, ROA
-
-**Best For:** "Is this company financially healthy?"
-
----
-
-### Tab 4: 🌐 Multi-Sector Analysis
-
-**Purpose:** Compare stocks across different market sectors
-
-**What It Does:**
-- Analyzes multiple sectors (Banking, Technology, Clean Energy, etc.)
-- Runs 4 strategies on every stock in every sector
-- Compares performance ACROSS sectors
-- Identifies best opportunities from entire universe
-
-**Default Sectors:**
 ```
-Banking: JPM, BAC, WFC, C, GS, MS, USB, PNC, TFC, COF
-Technology: AAPL, MSFT, GOOGL, META, NVDA, AMD, CRM, ORCL, ADBE, INTC
-Clean Energy: TSLA, NIO, RIVN, LCID, PLUG, SEDG, NEE, ICLN, ENPH
+┌─────────────────────────────────────┐
+│  ⚙️ Settings                        │
+│                                     │
+│  🤖 Agent Type                      │
+│  ○ 🔧 ToolCallingAgent (Original)   │
+│  ● 🐍 CodeAgent (New - Faster)      │
+│                                     │
+│  Code Executor: [local ▼]           │
+│                                     │
+└─────────────────────────────────────┘
 ```
 
-**Best For:** "Where should I invest across the entire market?"
+### 5 Analysis Types
 
-⚠️ **Note:** This is compute-intensive (120+ tool calls for 3 sectors × 10 stocks)
-
----
-
-### Tab 5: 🔄 Combined Analysis
-
-**Purpose:** Merge Technical and Fundamental analysis for complete picture
-
-**Philosophy:**
-- **Fundamental Analysis** = "WHAT to buy" (company quality)
-- **Technical Analysis** = "WHEN to buy" (timing)
-- **Combined** = 360-degree investment view
-
-**Signal Alignment:**
-| FA Signal | TA Signal | Interpretation |
-|-----------|-----------|----------------|
-| Bullish | Bullish | ✅ High conviction BUY |
-| Bullish | Bearish | ⚠️ Good company, bad timing - WAIT |
-| Bearish | Bullish | ⚠️ Technical bounce, weak fundamentals - CAUTION |
-| Bearish | Bearish | ❌ High conviction AVOID |
-
-**Best For:** "Give me the complete investment picture"
+| Tab | Description | Recommended Agent |
+|-----|-------------|-------------------|
+| 📈 Technical | Single stock, 4 strategies | Either |
+| 🔍 Scanner | Multi-stock comparison | 🐍 CodeAgent |
+| 📊 Fundamental | Financial statements | Either |
+| 🌐 Multi-Sector | Cross-sector analysis | 🐍 CodeAgent |
+| 🔄 Combined | Tech + Fundamental | Either |
 
 ---
 
@@ -298,9 +343,13 @@ OPENAI_API_KEY=sk-your-openai-key-here
 # OR
 HF_TOKEN=hf_your-huggingface-token
 
-# Optional - Model Configuration
-SMOLAGENT_MODEL_ID=gpt-4o           # Default model
+# Model Configuration
+SMOLAGENT_MODEL_ID=gpt-4o           # Recommended for CodeAgent
 SMOLAGENT_MODEL_PROVIDER=litellm     # litellm or inference
+
+# Agent Configuration (NEW)
+SMOLAGENT_AGENT_TYPE=code_agent      # tool_calling or code_agent
+SMOLAGENT_EXECUTOR=local             # local, e2b, or docker
 SMOLAGENT_MAX_STEPS=25               # Max reasoning steps
 
 # Optional - Defaults
@@ -326,7 +375,7 @@ Open your browser to `http://localhost:8501`
 
 ### 1. MCP Server (`server/`)
 
-The **Model Context Protocol Server** provides all financial analysis tools. It's a standalone process that the bot connects to via stdio.
+The **Model Context Protocol Server** provides all financial analysis tools.
 
 **Key Features:**
 - 5 technical analysis strategies
@@ -338,48 +387,47 @@ The **Model Context Protocol Server** provides all financial analysis tools. It'
 
 ### 2. Stock Analyzer Bot (`stock_analyzer_bot/`)
 
-The **smolagents-powered orchestration layer** that uses LLMs to call tools and generate reports.
+The **smolagents-powered orchestration layer** with dual agent support.
 
-**Key Features:**
-- ToolCallingAgent with 7 wrapped tools
-- 5 analysis functions for different use cases
-- Intelligent prompt engineering
-- FastAPI REST endpoints
+**Key Files:**
+- `main.py` - ToolCallingAgent implementation
+- `main_codeagent.py` - CodeAgent implementation
+- `api.py` - FastAPI endpoints with agent selection
+- `tools.py` - MCP tool wrappers
 
 📚 **Detailed Documentation:** [stock_analyzer_bot/README.md](stock_analyzer_bot/README.md)
 
 ### 3. Streamlit Frontend (`streamlit_app.py`)
 
-The **web interface** providing 5 analysis tabs with session history.
-
-**Key Features:**
-- 5 analysis type tabs
-- Model configuration sidebar
-- Analysis history tracking
-- Markdown report rendering
+The **web interface** with agent toggle and 5 analysis tabs.
 
 ---
 
 ## 📡 API Reference
 
+### Agent Selection
+
+All endpoints now accept `agent_type` parameter:
+
+```json
+{
+  "symbol": "AAPL",
+  "period": "1y",
+  "agent_type": "code_agent",
+  "executor_type": "local"
+}
+```
+
 ### Available Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/health` | GET | Health check and version info |
+| `/health` | GET | Health check, shows available agents |
 | `/technical` | POST | Single stock, 4 strategies |
 | `/scanner` | POST | Multi-stock comparison |
 | `/fundamental` | POST | Financial statement analysis |
 | `/multisector` | POST | Cross-sector analysis |
 | `/combined` | POST | Technical + Fundamental |
-
-### Example API Call
-
-```bash
-curl -X POST "http://localhost:8000/technical" \
-  -H "Content-Type: application/json" \
-  -d '{"symbol": "AAPL", "period": "1y"}'
-```
 
 ### Response Format
 
@@ -388,7 +436,8 @@ curl -X POST "http://localhost:8000/technical" \
   "report": "# AAPL Comprehensive Technical Analysis\n...",
   "symbol": "AAPL",
   "analysis_type": "technical",
-  "duration_seconds": 45.2
+  "duration_seconds": 35.2,
+  "agent_type": "code_agent"
 }
 ```
 
@@ -398,66 +447,51 @@ curl -X POST "http://localhost:8000/technical" \
 
 ### Supported LLM Models
 
-| Provider | Model ID | Best For |
-|----------|----------|----------|
-| OpenAI | `gpt-4o` | Best quality, recommended |
-| OpenAI | `gpt-4o-mini` | Faster, cost-effective |
-| OpenAI | `gpt-4-turbo` | Good balance |
-| HuggingFace | `meta-llama/Llama-3.1-70B-Instruct` | Open source |
+| Provider | Model ID | CodeAgent Support |
+|----------|----------|-------------------|
+| OpenAI | `gpt-4o` | ✅ Excellent |
+| OpenAI | `gpt-4o-mini` | ✅ Good |
+| OpenAI | `gpt-4-turbo` | ✅ Excellent |
+| HuggingFace | `meta-llama/Llama-3.1-70B-Instruct` | ⚠️ Variable |
+
+**Note:** CodeAgent works best with models that have strong Python code generation abilities. GPT-4o is recommended.
 
 ### Analysis Periods
 
 Valid periods: `1d`, `5d`, `1mo`, `3mo`, `6mo`, `1y`, `2y`, `5y`, `10y`, `ytd`, `max`
 
-### Strategy Parameters
-
-| Strategy | Key Parameters |
-|----------|----------------|
-| Bollinger-Fibonacci | window=20, num_std=2 |
-| MACD-Donchian | fast=12, slow=26, signal=9 |
-| Connors RSI | rsi_period=3, streak=2, rank=100 |
-| Dual MA | short=50, long=200, type=EMA |
-
 ---
 
-## 🧪 Example Reports
+## 🧪 Testing Both Agents
 
-### Technical Analysis Report Structure
+### Quick Comparison
 
-```markdown
-# AAPL Comprehensive Technical Analysis
-*Analysis Date: 2024-01-15*
-*Current Price: $185.92*
+```bash
+# Test both agents on same stock
+python test_codeagent.py AAPL
 
-## Executive Summary
-[2-3 paragraphs synthesizing all strategy findings]
-
-## Strategy Performance Comparison
-| Strategy | Signal | Score | Return | Sharpe | Max DD |
-|----------|--------|-------|--------|--------|--------|
-| Bollinger-Fib | BUY | +45 | 12.3% | 1.2 | -8.5% |
-| MACD-Donchian | HOLD | +15 | 8.1% | 0.9 | -12.1% |
-| ... | ... | ... | ... | ... | ... |
-
-## Individual Strategy Analysis
-[Detailed breakdown of each strategy]
-
-## Risk Assessment
-[Volatility, drawdown analysis]
-
-## Final Recommendation: **BUY**
-[Supporting rationale]
+# Test on market scanner
+python test_codeagent.py AAPL --mode scanner --symbols "AAPL,MSFT,GOOGL"
 ```
+
+### In Streamlit
+
+1. Run Technical Analysis with **ToolCallingAgent**
+2. Note the duration in History
+3. Switch to **CodeAgent** in sidebar
+4. Run same analysis
+5. Compare times
 
 ---
 
 ## 🔒 Security & Disclaimers
 
-### API Key Security
+### Code Execution Security
 
-- Never commit `.env` files to version control
-- Use environment variables for all sensitive data
-- API keys are never logged or stored
+When using CodeAgent:
+- **Development**: `local` executor is fine
+- **Production**: Use `e2b` or `docker` for sandboxed execution
+- Never run untrusted code in local executor
 
 ### Financial Disclaimer
 
@@ -467,13 +501,6 @@ Valid periods: `1d`, `5d`, `1mo`, `3mo`, `6mo`, `1y`, `2y`, `5y`, `10y`, `ytd`, 
 - Past performance does not guarantee future results
 - This is NOT financial advice
 - Consult a licensed financial advisor before investing
-- The authors assume no liability for investment decisions
-
-### Data Sources
-
-- Market data from Yahoo Finance (subject to their terms of service)
-- Data may have delays, gaps, or inaccuracies
-- Always verify data against official sources
 
 ---
 
@@ -481,10 +508,10 @@ Valid periods: `1d`, `5d`, `1mo`, `3mo`, `6mo`, `1y`, `2y`, `5y`, `10y`, `ytd`, 
 
 | Issue | Solution |
 |-------|----------|
+| "CodeAgent not available" | Ensure `main_codeagent.py` exists in `stock_analyzer_bot/` |
+| "Code execution failed" | Check Python syntax in LLM output, try different model |
 | "MCP server not found" | Verify `server/main.py` exists at project root |
-| "Connection refused" | Start FastAPI: `uvicorn stock_analyzer_bot.api:app --port 8000` |
-| "Authentication error" | Check `OPENAI_API_KEY` in `.env` |
-| "Timeout" | Reduce number of stocks or increase timeout |
+| "Timeout" | Reduce stocks or increase timeout; use CodeAgent for multi-stock |
 | "Agent stopped early" | Increase `max_steps` parameter |
 
 ---
@@ -494,26 +521,29 @@ Valid periods: `1d`, `5d`, `1mo`, `3mo`, `6mo`, `1y`, `2y`, `5y`, `10y`, `ytd`, 
 | Document | Description |
 |----------|-------------|
 | [server/README.md](server/README.md) | MCP Server tools, strategies, parameters |
-| [stock_analyzer_bot/README.md](stock_analyzer_bot/README.md) | Smolagents integration, API endpoints |
-| [HuggingFace Smolagents Docs](https://huggingface.co/docs/smolagents/index) | Official smolagents documentation |
-| [MCP Documentation](https://modelcontextprotocol.io/) | Model Context Protocol specification |
+| [stock_analyzer_bot/README.md](stock_analyzer_bot/README.md) | Agent implementations, API endpoints |
+| [docs/SECTORS_REFERENCE.md](docs/SECTORS_REFERENCE.md) | Sector symbols and configuration |
+| [HuggingFace Smolagents](https://huggingface.co/docs/smolagents/index) | Official smolagents documentation |
+| [Secure Code Execution](https://huggingface.co/docs/smolagents/tutorials/secure_code_execution) | CodeAgent security guide |
 
 ---
 
 ## 🤝 Contributing
 
 1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/new-strategy`)
+2. Create a feature branch
 3. Implement your changes
 4. Add tests if applicable
 5. Submit a pull request
 
-### Adding New Strategies
+### Adding New Agent Types
 
-1. Create strategy module in `server/strategies/`
-2. Register with MCP server in `server/main.py`
-3. Create tool wrapper in `stock_analyzer_bot/tools.py`
-4. Update prompts in `stock_analyzer_bot/main.py`
+The architecture supports adding new agent types:
+
+1. Create new module in `stock_analyzer_bot/`
+2. Implement same function signatures as `main.py`
+3. Register in `api.py` with new agent type option
+4. Update UI in `streamlit_app.py`
 
 ---
 
@@ -536,3 +566,7 @@ This project is provided for educational purposes. Users must comply with:
 
 ---
 
+<p align="center">
+  <b>Built with ❤️ using smolagents, MCP, FastAPI, and Streamlit</b><br>
+  <i>Now with dual agent support: ToolCallingAgent & CodeAgent</i>
+</p>
