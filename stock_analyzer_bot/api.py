@@ -1,5 +1,4 @@
-"""
-FastAPI backend for the LLM-powered MCP Stock Analyzer.
+"""Stock Analyzer API - FastAPI endpoints with dual agent support.
 
 #####################################################################
 # TWO AGENT ARCHITECTURES
@@ -44,6 +43,8 @@ from .main import (
     DEFAULT_MODEL_ID,
     DEFAULT_MODEL_PROVIDER,
     DEFAULT_MAX_STEPS,
+    DEFAULT_TEMPERATURE,
+    DEFAULT_MAX_TOKENS,
     run_technical_analysis as run_technical_toolcalling,
     run_market_scanner as run_scanner_toolcalling,
     run_fundamental_analysis as run_fundamental_toolcalling,
@@ -60,11 +61,13 @@ try:
         run_multi_sector_analysis as run_multisector_codeagent,
         run_combined_analysis as run_combined_codeagent,
         DEFAULT_EXECUTOR,
+        DEFAULT_MAX_TOKENS as CODEAGENT_MAX_TOKENS,
     )
     CODEAGENT_AVAILABLE = True
 except ImportError:
     CODEAGENT_AVAILABLE = False
     DEFAULT_EXECUTOR = "local"
+    CODEAGENT_MAX_TOKENS = 8192
 
 from .tools import configure_finance_tools, shutdown_finance_tools
 
@@ -89,29 +92,18 @@ app = FastAPI(
     description="""
     LLM-powered financial analysis using MCP tools and smolagents.
     
-    ## Two Agent Architectures
+    ## Features
+    - Technical analysis (4 strategies)
+    - Market scanning (multi-stock comparison)
+    - Fundamental analysis (financial statements)
+    - Multi-sector analysis
+    - Combined analysis (technical + fundamental)
     
-    ### 🔧 ToolCallingAgent (tool_calling)
-    - Uses **HIGH-LEVEL** tools that do everything in one MCP call
-    - `comprehensive_performance_report` - Full technical analysis in 1 call
-    - `unified_market_scanner` - Multi-stock scanning in 1 call
-    - `fundamental_analysis_report` - Complete financials in 1 call
-    - **Best for:** Production, speed, reliability
-    
-    ### 🐍 CodeAgent (code_agent)
-    - Uses **LOW-LEVEL** granular tools + Python code orchestration
-    - 4 individual strategy tools called via loops
-    - LLM writes custom Python code to combine results
-    - **Best for:** Custom analysis, transparency, learning
-    
-    ## Endpoints
-    - **POST /technical** - Single stock, all strategies
-    - **POST /scanner** - Multi-stock comparison
-    - **POST /fundamental** - Financial statements
-    - **POST /multisector** - Cross-sector analysis
-    - **POST /combined** - Technical + Fundamental
+    ## Agent Types
+    - **tool_calling**: Uses HIGH-LEVEL tools (faster, simpler)
+    - **code_agent**: Uses LOW-LEVEL tools + Python code (flexible, transparent)
     """,
-    version="3.0.0",
+    version="3.1.0",
 )
 
 app.add_middleware(
@@ -124,46 +116,21 @@ app.add_middleware(
 
 
 # =============================================================================
-# Startup/Shutdown Events
-# =============================================================================
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize MCP connection on startup."""
-    logger.info("Starting MCP finance tools...")
-    configure_finance_tools()
-    logger.info("MCP finance tools ready")
-    logger.info("ToolCallingAgent: Uses HIGH-LEVEL tools (comprehensive_performance_report, etc.)")
-    if CODEAGENT_AVAILABLE:
-        logger.info("CodeAgent: Available - Uses LOW-LEVEL tools (4 strategies + Python code)")
-    else:
-        logger.warning("CodeAgent: Not available - main_codeagent.py not found")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Clean up MCP connection on shutdown."""
-    logger.info("Shutting down MCP finance tools...")
-    shutdown_finance_tools()
-    logger.info("MCP finance tools stopped")
-
-
-# =============================================================================
 # Request/Response Models
 # =============================================================================
 
 class TechnicalAnalysisRequest(BaseModel):
-    """Request for single-stock technical analysis."""
-    symbol: str = Field(..., description="Ticker symbol to analyze (e.g., AAPL)")
-    period: str = Field(DEFAULT_PERIOD, description="Historical period (1y, 6mo, 3mo, etc.)")
-    model_id: Optional[str] = Field(None, description="Override LLM model (e.g., gpt-4o)")
+    """Request model for technical analysis."""
+    symbol: str = Field(..., description="Ticker symbol to analyze")
+    period: str = Field("1y", description="Analysis period")
+    model_id: Optional[str] = Field(None, description="Override LLM model")
     model_provider: Optional[str] = Field(None, description="Provider: litellm or inference")
     openai_api_key: Optional[str] = Field(None, description="Override OpenAI API key")
     hf_token: Optional[str] = Field(None, description="Override HuggingFace token")
-    max_steps: Optional[int] = Field(None, description="Max agent reasoning steps")
+    max_steps: Optional[int] = Field(None, description="Max agent steps")
     agent_type: Optional[Literal["tool_calling", "code_agent"]] = Field(
-        None, 
-        description="tool_calling (HIGH-LEVEL tools) or code_agent (LOW-LEVEL tools)"
+        None,
+        description="tool_calling (1 call) or code_agent (4 tools + synthesis)"
     )
     executor_type: Optional[Literal["local", "e2b", "docker"]] = Field(
         None,
@@ -172,12 +139,9 @@ class TechnicalAnalysisRequest(BaseModel):
 
 
 class MarketScannerRequest(BaseModel):
-    """Request for multi-stock market scanning."""
-    symbols: str = Field(
-        DEFAULT_SCANNER_SYMBOLS,
-        description="Comma-separated ticker symbols (e.g., AAPL,MSFT,GOOGL)",
-    )
-    period: str = Field(DEFAULT_PERIOD, description="Historical period for analysis")
+    """Request model for market scanner."""
+    symbols: str = Field(..., description="Comma-separated ticker symbols")
+    period: str = Field("1y", description="Analysis period")
     model_id: Optional[str] = Field(None, description="Override LLM model")
     model_provider: Optional[str] = Field(None, description="Provider: litellm or inference")
     openai_api_key: Optional[str] = Field(None, description="Override OpenAI API key")
@@ -185,7 +149,7 @@ class MarketScannerRequest(BaseModel):
     max_steps: Optional[int] = Field(None, description="Max agent steps")
     agent_type: Optional[Literal["tool_calling", "code_agent"]] = Field(
         None,
-        description="tool_calling (1 scanner call) or code_agent (loops over tools)"
+        description="tool_calling (1 call) or code_agent (N×4 tools + synthesis)"
     )
     executor_type: Optional[Literal["local", "e2b", "docker"]] = Field(
         None,
@@ -194,17 +158,17 @@ class MarketScannerRequest(BaseModel):
 
 
 class FundamentalAnalysisRequest(BaseModel):
-    """Request for fundamental financial analysis."""
+    """Request model for fundamental analysis."""
     symbol: str = Field(..., description="Ticker symbol to analyze")
-    period: str = Field("3y", description="Period for financial statements")
+    period: str = Field("3y", description="Period for financial data")
     model_id: Optional[str] = Field(None, description="Override LLM model")
     model_provider: Optional[str] = Field(None, description="Provider: litellm or inference")
     openai_api_key: Optional[str] = Field(None, description="Override OpenAI API key")
     hf_token: Optional[str] = Field(None, description="Override HuggingFace token")
-    max_steps: Optional[int] = Field(None, description="Max agent reasoning steps")
+    max_steps: Optional[int] = Field(None, description="Max agent steps")
     agent_type: Optional[Literal["tool_calling", "code_agent"]] = Field(
         None,
-        description="Both use fundamental_analysis_report tool"
+        description="tool_calling or code_agent"
     )
     executor_type: Optional[Literal["local", "e2b", "docker"]] = Field(
         None,
@@ -213,15 +177,15 @@ class FundamentalAnalysisRequest(BaseModel):
 
 
 class SectorConfig(BaseModel):
-    """Configuration for a single sector."""
-    name: str = Field(..., description="Sector name (e.g., Banking, Technology)")
-    symbols: str = Field(..., description="Comma-separated ticker symbols")
+    """Configuration for a sector in multi-sector analysis."""
+    name: str = Field(..., description="Sector name")
+    symbols: str = Field(..., description="Comma-separated symbols in this sector")
 
 
 class MultiSectorAnalysisRequest(BaseModel):
-    """Request for multi-sector comparative analysis."""
+    """Request model for multi-sector analysis."""
     sectors: List[SectorConfig] = Field(..., description="List of sectors to analyze")
-    period: str = Field(DEFAULT_PERIOD, description="Historical period for analysis")
+    period: str = Field("1y", description="Analysis period")
     model_id: Optional[str] = Field(None, description="Override LLM model")
     model_provider: Optional[str] = Field(None, description="Provider: litellm or inference")
     openai_api_key: Optional[str] = Field(None, description="Override OpenAI API key")
@@ -229,7 +193,7 @@ class MultiSectorAnalysisRequest(BaseModel):
     max_steps: Optional[int] = Field(None, description="Max agent steps")
     agent_type: Optional[Literal["tool_calling", "code_agent"]] = Field(
         None,
-        description="tool_calling (scanner per sector) or code_agent (nested loops)"
+        description="tool_calling (N calls) or code_agent (nested loops)"
     )
     executor_type: Optional[Literal["local", "e2b", "docker"]] = Field(
         None,
@@ -238,7 +202,7 @@ class MultiSectorAnalysisRequest(BaseModel):
 
 
 class CombinedAnalysisRequest(BaseModel):
-    """Request for combined Technical + Fundamental analysis."""
+    """Request model for combined technical + fundamental analysis."""
     symbol: str = Field(..., description="Ticker symbol to analyze")
     technical_period: str = Field("1y", description="Period for technical analysis")
     fundamental_period: str = Field("3y", description="Period for fundamental data")
@@ -276,7 +240,7 @@ async def healthcheck() -> dict:
     """Check API health and list available features."""
     return {
         "status": "ok",
-        "version": "3.0.0",
+        "version": "3.1.0",
         "features": [
             "technical_analysis",
             "market_scanner", 
@@ -289,11 +253,14 @@ async def healthcheck() -> dict:
                 "available": True,
                 "approach": "HIGH-LEVEL tools",
                 "tools": ["comprehensive_performance_report", "unified_market_scanner", "fundamental_analysis_report"],
+                "temperature": DEFAULT_TEMPERATURE,
+                "max_tokens": DEFAULT_MAX_TOKENS,
             },
             "code_agent": {
                 "available": CODEAGENT_AVAILABLE,
                 "approach": "LOW-LEVEL tools + Python code",
                 "tools": ["bollinger_fibonacci", "macd_donchian", "connors_zscore", "dual_ma", "fundamental"],
+                "max_tokens": CODEAGENT_MAX_TOKENS,
             },
         },
         "default_agent_type": DEFAULT_AGENT_TYPE,
@@ -364,6 +331,7 @@ async def technical_analysis(request: TechnicalAnalysisRequest) -> dict:
                 openai_base_url=DEFAULT_OPENAI_BASE,
                 max_steps=request.max_steps or 20,
                 executor_type=request.executor_type or DEFAULT_EXECUTOR,
+                max_tokens=CODEAGENT_MAX_TOKENS,
             )
         else:
             result = await run_in_threadpool(
@@ -376,6 +344,8 @@ async def technical_analysis(request: TechnicalAnalysisRequest) -> dict:
                 hf_token=request.hf_token or DEFAULT_HF_TOKEN,
                 openai_base_url=DEFAULT_OPENAI_BASE,
                 max_steps=request.max_steps or DEFAULT_MAX_STEPS,
+                temperature=DEFAULT_TEMPERATURE,
+                max_tokens=DEFAULT_MAX_TOKENS,
             )
     except Exception as exc:
         logger.exception("Technical analysis failed for %s", request.symbol)
@@ -404,18 +374,22 @@ async def market_scanner(request: MarketScannerRequest) -> dict:
     Scan multiple stocks and generate comparative analysis.
     
     **ToolCallingAgent (tool_calling):**
-    - Calls `unified_market_scanner` (1 MCP call for all stocks)
-    - Most efficient for multi-stock analysis
+    - Calls `unified_market_scanner` (1 MCP call)
+    - Analyzes all stocks at once
     
     **CodeAgent (code_agent):**
-    - Writes Python loops to call 4 tools per stock
-    - More transparent but slower
+    - Loops through each stock, calling 4 strategy tools each
+    - More granular but slower
     """
     start_time = time.time()
     agent_type = get_agent_type(request.agent_type)
     
-    symbol_count = len([s for s in request.symbols.split(",") if s.strip()])
-    logger.info("Market scanner: %d stocks (agent=%s)", symbol_count, agent_type)
+    symbol_list = [s.strip() for s in request.symbols.split(",") if s.strip()]
+    
+    logger.info(
+        "Market scanner: %d stocks (period=%s, agent=%s)",
+        len(symbol_list), request.period, agent_type
+    )
     
     try:
         if agent_type == "code_agent":
@@ -430,6 +404,7 @@ async def market_scanner(request: MarketScannerRequest) -> dict:
                 openai_base_url=DEFAULT_OPENAI_BASE,
                 max_steps=request.max_steps or 30,
                 executor_type=request.executor_type or DEFAULT_EXECUTOR,
+                max_tokens=CODEAGENT_MAX_TOKENS,
             )
         else:
             result = await run_in_threadpool(
@@ -442,13 +417,15 @@ async def market_scanner(request: MarketScannerRequest) -> dict:
                 hf_token=request.hf_token or DEFAULT_HF_TOKEN,
                 openai_base_url=DEFAULT_OPENAI_BASE,
                 max_steps=request.max_steps or DEFAULT_MAX_STEPS,
+                temperature=DEFAULT_TEMPERATURE,
+                max_tokens=DEFAULT_MAX_TOKENS,
             )
     except Exception as exc:
         logger.exception("Market scanner failed")
         raise HTTPException(status_code=500, detail=f"Scanner failed: {exc}") from exc
     
     duration = time.time() - start_time
-    logger.info("Scanner completed in %.2fs (%s)", duration, agent_type)
+    logger.info("Market scanner completed: %d stocks in %.2fs (%s)", len(symbol_list), duration, agent_type)
     
     return {
         "report": result,
@@ -467,7 +444,7 @@ async def market_scanner(request: MarketScannerRequest) -> dict:
 @app.post("/fundamental", tags=["analysis"], response_model=AnalysisResponse)
 async def fundamental_analysis(request: FundamentalAnalysisRequest) -> dict:
     """
-    Run fundamental analysis on a stock's financial statements.
+    Run fundamental analysis on a single stock.
     
     Both agents use `fundamental_analysis_report` tool.
     The difference is in how they process/present the results.
@@ -490,6 +467,7 @@ async def fundamental_analysis(request: FundamentalAnalysisRequest) -> dict:
                 openai_base_url=DEFAULT_OPENAI_BASE,
                 max_steps=request.max_steps or 15,
                 executor_type=request.executor_type or DEFAULT_EXECUTOR,
+                max_tokens=CODEAGENT_MAX_TOKENS,
             )
         else:
             result = await run_in_threadpool(
@@ -502,6 +480,8 @@ async def fundamental_analysis(request: FundamentalAnalysisRequest) -> dict:
                 hf_token=request.hf_token or DEFAULT_HF_TOKEN,
                 openai_base_url=DEFAULT_OPENAI_BASE,
                 max_steps=request.max_steps or DEFAULT_MAX_STEPS,
+                temperature=DEFAULT_TEMPERATURE,
+                max_tokens=DEFAULT_MAX_TOKENS,
             )
     except Exception as exc:
         logger.exception("Fundamental analysis failed for %s", request.symbol)
@@ -564,6 +544,7 @@ async def multi_sector_analysis(request: MultiSectorAnalysisRequest) -> dict:
                 openai_base_url=DEFAULT_OPENAI_BASE,
                 max_steps=request.max_steps or 50,
                 executor_type=request.executor_type or DEFAULT_EXECUTOR,
+                max_tokens=CODEAGENT_MAX_TOKENS,
             )
         else:
             result = await run_in_threadpool(
@@ -576,6 +557,8 @@ async def multi_sector_analysis(request: MultiSectorAnalysisRequest) -> dict:
                 hf_token=request.hf_token or DEFAULT_HF_TOKEN,
                 openai_base_url=DEFAULT_OPENAI_BASE,
                 max_steps=request.max_steps or 30,
+                temperature=DEFAULT_TEMPERATURE,
+                max_tokens=DEFAULT_MAX_TOKENS,
             )
     except Exception as exc:
         logger.exception("Multi-sector analysis failed")
@@ -631,6 +614,7 @@ async def combined_analysis(request: CombinedAnalysisRequest) -> dict:
                 openai_base_url=DEFAULT_OPENAI_BASE,
                 max_steps=request.max_steps or 25,
                 executor_type=request.executor_type or DEFAULT_EXECUTOR,
+                max_tokens=CODEAGENT_MAX_TOKENS,
             )
         else:
             result = await run_in_threadpool(
@@ -644,6 +628,8 @@ async def combined_analysis(request: CombinedAnalysisRequest) -> dict:
                 hf_token=request.hf_token or DEFAULT_HF_TOKEN,
                 openai_base_url=DEFAULT_OPENAI_BASE,
                 max_steps=request.max_steps or DEFAULT_MAX_STEPS,
+                temperature=DEFAULT_TEMPERATURE,
+                max_tokens=DEFAULT_MAX_TOKENS,
             )
     except Exception as exc:
         logger.exception("Combined analysis failed for %s", request.symbol)
@@ -660,3 +646,32 @@ async def combined_analysis(request: CombinedAnalysisRequest) -> dict:
         "agent_type": agent_type,
         "tools_approach": get_tools_approach(agent_type),
     }
+
+
+# =============================================================================
+# Startup/Shutdown Events
+# =============================================================================
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize MCP connection on startup."""
+    logger.info("Starting Stock Analyzer API v3.1.0")
+    logger.info("Default agent type: %s", DEFAULT_AGENT_TYPE)
+    logger.info("CodeAgent available: %s", CODEAGENT_AVAILABLE)
+    logger.info("ToolCallingAgent temperature: %s, max_tokens: %s", DEFAULT_TEMPERATURE, DEFAULT_MAX_TOKENS)
+    try:
+        configure_finance_tools()
+        logger.info("MCP tools configured successfully")
+    except Exception as exc:
+        logger.error("Failed to configure MCP tools: %s", exc)
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup MCP connection on shutdown."""
+    logger.info("Shutting down Stock Analyzer API")
+    try:
+        shutdown_finance_tools()
+        logger.info("MCP tools shutdown successfully")
+    except Exception as exc:
+        logger.error("Error during MCP shutdown: %s", exc)

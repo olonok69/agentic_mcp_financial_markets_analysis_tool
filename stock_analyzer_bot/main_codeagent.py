@@ -46,6 +46,8 @@ __all__ = [
     "run_fundamental_analysis",
     "run_multi_sector_analysis",
     "run_combined_analysis",
+    "DEFAULT_EXECUTOR",
+    "DEFAULT_MAX_TOKENS",
 ]
 
 # ===========================================================================
@@ -142,6 +144,9 @@ def format_agent_result(result: Any) -> str:
     text = text.replace('\\n', '\n')
     text = text.replace('\\t', '\t')
     text = text.replace('\\r', '\r')
+    # Normalize control characters that can break Markdown rendering
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
+    text = ''.join(ch for ch in text if ch in ('\n', '\t') or ord(ch) >= 32)
     
     # Clean up any excessive newlines (more than 3 consecutive)
     while '\n\n\n\n' in text:
