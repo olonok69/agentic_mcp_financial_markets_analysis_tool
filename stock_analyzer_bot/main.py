@@ -270,67 +270,209 @@ MARKET_SCANNER_PROMPT = """You are a senior financial analyst. Scan these stocks
 
 Call unified_market_scanner(symbols="{symbols}", period="{period}", output_format="detailed")
 
-Create a CONCISE report:
+Create a report matching this EXACT format:
 
 # Market Scanner Report
 
-## Summary
-Scanned {symbol_count} stocks | Period: {period}
+## Executive Summary
 
-## Rankings
+Scanned {symbol_count} stocks using four technical strategies.
 
-| Rank | Symbol | BUY Signals | Outlook | Action |
-|------|--------|-------------|---------|--------|
-| 1 | [SYM] | [X]/4 | [BULL/BEAR] | [BUY/HOLD/SELL] |
-| 2 | [SYM] | [X]/4 | [BULL/BEAR] | [BUY/HOLD/SELL] |
-[continue for each stock...]
+**Stocks Analyzed:** {symbols}
 
-## 🎯 Top Picks (3+ BUY signals)
-🥇 **[SYM]** - [X]/4 BUY - [reason]
-🥈 **[SYM]** - [X]/4 BUY - [reason]
+**Analysis Period:** {period}
 
-## Avoid (0-1 BUY signals)
-- **[SYM]** - [reason]
+---
 
-## Market Outlook: [BULLISH/BEARISH/NEUTRAL]
+## Stock Rankings Summary Table
 
-*Extract real data. Keep brief.*
+| Rank | Symbol | BUY Signals | Overall Signal | Recommendation |
+|------|--------|-------------|----------------|----------------|
+| 1 | [SYMBOL] | [X]/4 | [BULLISH/NEUTRAL/BEARISH] | [STRONG BUY/BUY/HOLD/SELL/AVOID] |
+| 2 | [SYMBOL] | [X]/4 | [BULLISH/NEUTRAL/BEARISH] | [STRONG BUY/BUY/HOLD/SELL/AVOID] |
+[continue for each stock, ranked by BUY signals descending]
+
+---
+
+## Detailed Stock Analysis
+
+### 🥇 Rank 1: [SYMBOL]
+
+**Signal Breakdown:**
+
+| Strategy | Signal |
+|----------|--------|
+| Bollinger-Fibonacci | [BUY/SELL/HOLD] |
+| MACD-Donchian | [BUY/SELL/HOLD] |
+| Connors RSI-ZScore | [BUY/SELL/HOLD] |
+| Dual Moving Average | [BUY/SELL/HOLD] |
+
+**Verdict:** [X]/4 BUY signals - [RECOMMENDATION]
+
+---
+
+[Repeat the above format for Rank 2, Rank 3, Rank 4, etc.]
+
+---
+
+## 🎯 TOP PICKS
+
+### Best Opportunities (3+ BUY signals):
+
+[List stocks with 3+ BUY signals, or "No stocks with 3+ BUY signals in this scan."]
+
+### Stocks to Avoid (0 BUY signals):
+
+[List stocks with 0 BUY signals, or "No stocks with 0 BUY signals in this scan."]
+
+---
+
+## Market Sentiment
+
+- **Average BUY Signals:** [X.X]/4 across all stocks
+- **Market Outlook:** [BULLISH/NEUTRAL/BEARISH]
+
+**Disclaimer:** This analysis is for educational purposes only.
+
+---
+
+IMPORTANT RULES:
+1. Extract REAL signals from the tool output for each stock
+2. Rank stocks by BUY signal count (highest first)
+3. Use medal emojis: 🥇 for Rank 1, 🥈 for Rank 2, 🥉 for Rank 3
+4. Include the Signal Breakdown table for EACH stock
+5. Calculate the average BUY signals across all stocks
 """
 
 FUNDAMENTAL_ANALYSIS_PROMPT = """Analyze {symbol} fundamentals.
 
 Call fundamental_analysis_report(symbol="{symbol}", period="{period}")
 
-Create a CONCISE report:
+Create a report matching this EXACT format:
 
-# {symbol} Fundamental Analysis
+# {symbol} Fundamental Analysis Report
 
-## Summary
-**Health:** [STRONG/MODERATE/WEAK] | **Grade:** [A/B/C/D/F] | **Period:** {period}
+## Executive Summary
 
-## Key Metrics
+**Company:** {symbol}
 
-| Metric | Value | Rating |
-|--------|-------|--------|
-| ROE | [X]% | [Good/Fair/Poor] |
-| Net Margin | [X]% | [Good/Fair/Poor] |
-| Debt/Equity | [X] | [Good/Fair/Poor] |
-| Current Ratio | [X] | [Good/Fair/Poor] |
-| P/E | [X] | [Good/Fair/Poor] |
+**Analysis Period:** {period}
 
-## Financials
-- Revenue: [X] USD | Net Income: [X] USD
-- Assets: [X] USD | Debt: [X] USD
-- Op. Cash Flow: [X] USD | Free Cash Flow: [X] USD
+**Financial Health:** [STRONG/MODERATE/WEAK]
 
-## Assessment
-✅ Strengths: [1-2 key points]
-❌ Weaknesses: [1-2 key points]
+**Investment Grade:** [A/B/C/D/F]
 
-## 🎯 Recommendation: **[BUY/HOLD/SELL]**
-[1-2 sentence rationale]
+---
 
-*Extract real numbers. Use USD.*
+## Financial Data
+
+### [Company Name] ({symbol}) Fundamental Analysis
+
+*Sector:* [Sector] | *Industry:* [Industry] | *Period:* {period}
+
+### Company Overview
+
+[Brief company description from the data]
+
+### Market Data
+
+- **Market Cap:** USD [X]
+- **P/E Ratio (TTM):** [X]
+- **Dividend Yield:** [X]%
+- **Beta:** [X]
+
+---
+
+## Income Statement Highlights
+
+- **Total Revenue:** USD [X]
+- **Revenue YoY Change:** [X]%
+- **Gross Profit:** USD [X]
+- **Net Income:** USD [X]
+
+### Profitability Ratios
+
+- **Gross Margin:** [X]%
+- **Operating Margin:** [X]%
+- **Net Profit Margin:** [X]%
+- **EBITDA Margin:** [X]%
+
+---
+
+## Balance Sheet Snapshot
+
+- **Total Assets:** USD [X]
+- **Total Liabilities:** USD [X]
+- **Shareholders' Equity:** USD [X]
+- **Cash & Equivalents:** USD [X]
+- **Total Debt:** USD [X]
+- **Long-Term Debt:** USD [X]
+
+### Liquidity Ratios
+
+- **Current Ratio:** [X]x
+- **Quick Ratio:** [X]x
+- **Cash Ratio:** [X]x
+
+### Leverage Ratios
+
+- **Debt-to-Equity:** [X]x
+- **Debt-to-Assets:** [X]x
+- **Equity Ratio:** [X]x
+
+---
+
+## Cash Flow Overview
+
+- **Operating Cash Flow:** USD [X]
+- **Investing Cash Flow:** USD [X]
+- **Financing Cash Flow:** USD [X]
+- **Capital Expenditures:** USD [X]
+- **Free Cash Flow:** USD [X]
+- **Dividends Paid:** USD [X]
+
+### Return Metrics
+
+- **Return on Assets (ROA):** [X]%
+- **Return on Equity (ROE):** [X]%
+
+---
+
+## Analytical Insights
+
+- [Insight 1 based on revenue/income trends]
+- [Insight 2 based on profitability margins]
+- [Insight 3 based on leverage ratios]
+- [Insight 4 based on liquidity]
+- [Insight 5 based on cash flow]
+- [Insight 6 based on return metrics]
+
+---
+
+## Disclaimer
+
+- This analysis is based on financial statements available through Yahoo Finance.
+- Data may not reflect the most recent filings or restated figures.
+- Always verify against official SEC filings (10-K, 10-Q) for investment decisions.
+- This is not financial advice.
+
+---
+
+## 🎯 RECOMMENDATION: **[STRONG BUY/BUY/HOLD/SELL/STRONG SELL]**
+
+**Rationale:** [2-3 sentences explaining the recommendation based on the fundamental data]
+
+**Disclaimer:** This analysis is for educational purposes only.
+
+---
+
+IMPORTANT RULES:
+1. Extract ALL real numbers from the tool output
+2. Use USD for all currency values (never use dollar signs)
+3. Include ALL sections shown above
+4. Provide specific analytical insights based on the actual data
+5. Grade: A (excellent), B (good), C (fair), D (poor), F (failing)
+6. Health: STRONG (Grade A-B), MODERATE (Grade C), WEAK (Grade D-F)
 """
 
 MULTI_SECTOR_PROMPT = """Compare these sectors:
@@ -340,83 +482,366 @@ Period: {period}
 
 For each sector, call unified_market_scanner(symbols="[stocks]", period="{period}", output_format="detailed")
 
-Create a CONCISE report:
+Create a COMPREHENSIVE report matching this EXACT format:
 
-# Multi-Sector Analysis
+# Multi-Sector Market Analysis Report
 
-## Summary
-**Strongest:** [Sector] | **Weakest:** [Sector] | **Period:** {period}
+**Analysis Date:** [Current Date]
+**Period:** {period} | **Total Stocks Analyzed:** [X] | **Sectors:** [X]
 
-## Sector Rankings
+---
 
-| Rank | Sector | Avg BUY | Best Stock | Outlook |
-|------|--------|---------|------------|---------|
-| 1 | [Sector] | [X.X]/4 | [SYM] | [BULL/BEAR] |
-| 2 | [Sector] | [X.X]/4 | [SYM] | [BULL/BEAR] |
+## 📊 Executive Summary
 
-## Sector Details
+### Cross-Sector Performance Overview
 
-**[Sector 1]:** [X.X]/4 avg - Top: [SYM] ([X]/4)
+| Sector | Stocks | Avg Buy Signals | Best Strategy | Success Rate | Best Opportunities |
+|--------|--------|-----------------|---------------|--------------|-------------------|
+| **[Sector 1]** | [X] | [X.X]/4 | [Strategy Name] | [X]% | [Top 2-3 symbols] |
+| **[Sector 2]** | [X] | [X.X]/4 | [Strategy Name] | [X]% | [Top 2-3 symbols] |
+| **OVERALL** | **[X]** | **[X.X]/4** | **[Best Overall]** | **[X]%** | **[X] Stocks** |
 
-**[Sector 2]:** [X.X]/4 avg - Top: [SYM] ([X]/4)
+### Key Market Insights
 
-## 🎯 Top Picks Across Sectors
-1. **[SYM]** ([Sector]) - [X]/4 BUY
-2. **[SYM]** ([Sector]) - [X]/4 BUY
+🔴 **[Insight 1]**: [Description of overall market condition]
+🏆 **[Insight 2]**: [Which sector leads and why]
+💡 **[Insight 3]**: [Number of opportunities identified]
+⚠️ **[Insight 4]**: [Risk factors or warnings]
 
-## Allocation
-- [Sector 1]: [X]% - [reason]
-- [Sector 2]: [X]% - [reason]
+---
 
-*Extract real data. Keep brief.*
+## 🎯 Final Investment Recommendations
+
+### 🟢 PRIORITY INVESTMENTS ([X] Stocks)
+
+#### 1. [SYMBOL] - USD [Price] | [Sector]
+**🎯 STRONG BUY | 📊 HIGH CONFIDENCE | 💰 [POSITION SIZE]**
+
+- **Performance**: [X]/4 strategies signal BUY
+- **Best Strategy**: [Strategy Name] ([X]% excess return)
+- **Signal Consensus**: [Bullish/Mixed/Bearish] across indicators
+- **Risk Level**: [Low/Medium/High]
+- **Why [SYMBOL]**: [1-2 sentence rationale]
+
+#### 2. [SYMBOL] - USD [Price] | [Sector]
+[Repeat format...]
+
+### 🔵 SECONDARY OPPORTUNITIES ([X] Stocks)
+
+#### [X]. [SYMBOL] - USD [Price] | [Sector]
+**🎯 BUY | 📊 MEDIUM CONFIDENCE | 💰 [POSITION SIZE]**
+
+[Same format as above...]
+
+---
+
+## 📈 Sector-by-Sector Analysis
+
+### 🏦 [Sector 1 Name]
+**Performance**: [X.X]/4 avg BUY signals | [X]% technical success rate
+
+**Key Findings**:
+- [Finding 1]
+- [Finding 2]
+- [Finding 3]
+
+**Top Picks**:
+1. **[SYMBOL]** - [X]/4 BUY signals - [Brief reason]
+2. **[SYMBOL]** - [X]/4 BUY signals - [Brief reason]
+
+**Avoid List**: [Symbols with 0-1 BUY signals]
+
+**Strategy**: [1-2 sentence sector strategy recommendation]
+
+---
+
+### 💻 [Sector 2 Name]
+[Repeat format for each sector...]
+
+---
+
+## 📬 Strategy Effectiveness Analysis
+
+### Cross-Sector Strategy Performance
+
+| Strategy | Overall Success Rate | Best Sector | Avg Signals | Reliability |
+|----------|---------------------|-------------|-------------|-------------|
+| **Bollinger-Fibonacci** | [X]% | [Sector] | [X.X]/stocks | [High/Medium/Low] |
+| **MACD-Donchian** | [X]% | [Sector] | [X.X]/stocks | [High/Medium/Low] |
+| **Connors RSI-ZScore** | [X]% | [Sector] | [X.X]/stocks | [High/Medium/Low] |
+| **Dual Moving Average** | [X]% | [Sector] | [X.X]/stocks | [High/Medium/Low] |
+
+### Key Strategy Insights
+- [Insight about which strategies work best]
+- [Insight about sector responsiveness]
+- [Insight about current market regime]
+
+---
+
+## 🎯 Portfolio Construction Framework
+
+### Recommended Portfolio Allocation
+
+**CONSERVATIVE APPROACH (Recommended)**
+- **[X]%** Cash/Fixed Income (defensive positioning)
+- **[X]%** [Sector 1] (reason)
+- **[X]%** [Sector 2] (reason)
+- **[X]%** Top picks concentration
+
+**AGGRESSIVE APPROACH (Higher Risk)**
+- **[X]%** Cash/Fixed Income
+- **[X]%** [Sector allocations...]
+
+### Risk Management Framework
+
+**Position Sizing Guidelines**:
+- **Maximum single position**: [X]%
+- **High-risk stocks**: [X]% maximum
+- **Sector exposure**: [X]% maximum per sector
+
+**Stop Loss Strategy**:
+- **[SYMBOL]**: [X]% below entry
+[Continue for each recommended stock...]
+
+---
+
+## 🔍 Market Outlook & Strategic Themes
+
+### Current Market Environment
+**[BULLISH/BEARISH/NEUTRAL] TECHNICAL REGIME**
+- [Key observation 1]
+- [Key observation 2]
+- [Key observation 3]
+
+### Risk Factors to Monitor
+- [Risk 1]
+- [Risk 2]
+- [Risk 3]
+
+---
+
+## 🎯 Action Plan & Next Steps
+
+### Immediate Actions (Next 30 Days)
+1. [Action 1 with specific allocation]
+2. [Action 2]
+3. [Action 3]
+
+### Monitoring Schedule
+- **Daily**: [What to monitor]
+- **Weekly**: [What to review]
+- **Monthly**: [What to assess]
+
+---
+
+## 📊 Appendix: Detailed Holdings Summary
+
+### PRIORITY HOLDINGS
+
+| Symbol | Sector | Action | BUY Signals | Risk | Position |
+|--------|--------|--------|-------------|------|----------|
+| [SYM] | [Sector] | STRONG BUY | [X]/4 | [Risk] | [X]% |
+| [SYM] | [Sector] | BUY | [X]/4 | [Risk] | [X]% |
+
+### AVOID HOLDINGS
+[Sector 1]: [List of symbols to avoid]
+[Sector 2]: [List of symbols to avoid]
+
+---
+
+*This analysis represents a point-in-time assessment based on technical factors. Market conditions change rapidly. Past performance does not guarantee future results.*
+
+---
+
+IMPORTANT RULES:
+1. Extract REAL data from all sector scans
+2. Rank sectors by average BUY signals
+3. Identify TOP 2-3 stocks across ALL sectors as priority picks
+4. Calculate success rates (stocks with 2+ BUY signals / total stocks)
+5. Use emojis for visual hierarchy: 📊🎯🟢🔵🏦💻⚠️
+6. Provide specific position sizing recommendations
+7. Include risk management with stop loss levels
 """
 
-COMBINED_ANALYSIS_PROMPT = """Complete analysis of {symbol}.
+COMBINED_ANALYSIS_PROMPT = """Complete Technical + Fundamental analysis of {symbol}.
 
-TOOLS:
+TOOLS TO CALL:
 1. comprehensive_performance_report(symbol="{symbol}", period="{technical_period}")
 2. fundamental_analysis_report(symbol="{symbol}", period="{fundamental_period}")
 
-Create a CONCISE report:
+Create a COMPREHENSIVE report matching this EXACT format:
 
-# {symbol} Combined Analysis
+# {symbol} Combined Investment Analysis
 
-## Summary
-**Recommendation:** [STRONG BUY/BUY/HOLD/SELL] | **Confidence:** [HIGH/MED/LOW]
-**Alignment:** [ALIGNED/DIVERGENT] (Tech vs Fundamental)
+## Executive Summary
 
-## Technical Summary (Period: {technical_period})
+**Symbol:** {symbol}
 
-| Strategy | Signal | Excess Return |
-|----------|--------|---------------|
-| Bollinger-Fib | [SIG] | [X]% |
-| MACD-Donchian | [SIG] | [X]% |
-| Connors RSI-Z | [SIG] | [X]% |
-| Dual MA | [SIG] | [X]% |
+**Technical Period:** {technical_period}
 
-**Technical:** [BULLISH/BEARISH/NEUTRAL] - [X]/4 BUY signals
+**Fundamental Period:** {fundamental_period}
 
-## Fundamental Summary (Period: {fundamental_period})
+**COMBINED RECOMMENDATION:** [STRONG BUY/BUY/HOLD/SELL/STRONG SELL]
 
-| Metric | Value | Rating |
-|--------|-------|--------|
-| ROE | [X]% | [G/F/P] |
-| Debt/Eq | [X] | [G/F/P] |
-| P/E | [X] | [G/F/P] |
+**Confidence Level:** [HIGH/MEDIUM/LOW]
 
-**Fundamental:** [STRONG/MODERATE/WEAK] health
+**Technical/Fundamental Alignment:** [ALIGNED ✅ / DIVERGENT ❌]
 
-## Alignment
-- Technical: [BULL/BEAR] | Fundamental: [POS/NEG] | Match: [✅/❌]
+---
 
-## 🎯 Recommendation: **[ACTION]**
-**Why:** [1-2 sentences combining both analyses]
+## Technical Analysis Summary
 
-**Holders:** ✅ [action]
-**Buyers:** [BUY/WAIT] - [condition]
-**Risk:** Max [X]% position, Stop at [level]
+### Technical Indicators Table
 
-*Educational purposes only.*
+| Strategy | Signal |
+|----------|--------|
+| Bollinger-Fibonacci | [BUY/SELL/HOLD] |
+| MACD-Donchian | [BUY/SELL/HOLD] |
+| Connors RSI-ZScore | [BUY/SELL/HOLD] |
+| Dual Moving Average | [BUY/SELL/HOLD] |
+
+**Technical Verdict:** [BULLISH/BEARISH/NEUTRAL] with [X]/4 BUY signals
+
+---
+
+## Fundamental Analysis Summary
+
+### [Company Name] ({symbol}) Fundamental Analysis
+
+*Sector:* [Sector] | *Industry:* [Industry] | *Period:* {fundamental_period}
+
+### Company Overview
+
+[Company description from the fundamental data]
+
+### Market Data
+
+- **Market Cap:** USD [X]
+- **P/E Ratio (TTM):** [X]
+- **Dividend Yield:** [X]%
+- **Beta:** [X]
+
+### Income Statement Highlights
+
+- **Total Revenue:** USD [X]
+- **Revenue YoY Change:** [X]%
+- **Gross Profit:** USD [X]
+- **Operating Income:** USD [X]
+- **Net Income:** USD [X]
+- **Net Income YoY Change:** [X]%
+- **EBITDA:** USD [X]
+- **Diluted EPS:** [X]
+
+### Profitability Ratios
+
+- **Gross Margin:** [X]%
+- **Operating Margin:** [X]%
+- **Net Profit Margin:** [X]%
+- **EBITDA Margin:** [X]%
+
+### Balance Sheet Snapshot
+
+- **Total Assets:** USD [X]
+- **Total Liabilities:** USD [X]
+- **Shareholders' Equity:** USD [X]
+- **Cash & Equivalents:** USD [X]
+- **Total Debt:** USD [X]
+- **Long-Term Debt:** USD [X]
+
+### Liquidity Ratios
+
+- **Current Ratio:** [X]x
+- **Quick Ratio:** [X]x
+- **Cash Ratio:** [X]x
+
+### Leverage Ratios
+
+- **Debt-to-Equity:** [X]x
+- **Debt-to-Assets:** [X]x
+- **Equity Ratio:** [X]x
+
+### Cash Flow Overview
+
+- **Operating Cash Flow:** USD [X]
+- **Investing Cash Flow:** USD [X]
+- **Financing Cash Flow:** USD [X]
+- **Capital Expenditures:** USD [X]
+- **Free Cash Flow:** USD [X]
+- **Dividends Paid:** USD [X]
+
+### Return Metrics
+
+- **Return on Assets (ROA):** [X]%
+- **Return on Equity (ROE):** [X]%
+
+### Analytical Insights
+
+- [Insight 1 based on revenue/income trends]
+- [Insight 2 based on profitability margins]
+- [Insight 3 based on leverage ratios]
+- [Insight 4 based on liquidity]
+- [Insight 5 based on cash flow]
+- [Insight 6 based on return metrics]
+
+### Disclaimer
+
+- This analysis is based on financial statements available through Yahoo Finance.
+- Data may not reflect the most recent filings or restated figures.
+- Always verify against official SEC filings (10-K, 10-Q) for investment decisions.
+- This is not financial advice.
+
+**Fundamental Verdict:** [POSITIVE/NEUTRAL/NEGATIVE]
+
+---
+
+## Alignment Analysis
+
+| Aspect | Technical | Fundamental | Alignment |
+|--------|-----------|-------------|-----------|
+| Overall | [BULLISH/BEARISH/NEUTRAL] | [POSITIVE/NEUTRAL/NEGATIVE] | [✅/❌] |
+
+**Alignment Status:** [ALIGNED/DIVERGENT]
+
+---
+
+## 🎯 FINAL RECOMMENDATION: **[STRONG BUY/BUY/HOLD/SELL/STRONG SELL]**
+
+### Why This Recommendation?
+
+**Technical Factors:** [X]/4 strategies show [bullish/bearish/mixed] signals
+
+**Fundamental Factors:** Financial analysis shows [positive/neutral/negative] outlook
+
+**Alignment:** Technical and fundamental views are [aligned/divergent]
+
+---
+
+### Investment Action Plan
+
+**For Current Holders:**
+- [Specific action recommendation]
+
+**For Potential Buyers:**
+- [Buy/Wait recommendation with conditions]
+
+**Risk Management:**
+- **Position Size:** Maximum [X]% of portfolio
+- **Stop Loss:** [X]% below entry or USD [price level]
+- **Take Profit:** Consider at [X]% gain
+
+---
+
+**Disclaimer:** This analysis is for educational purposes only. Always conduct your own research and consult with a financial advisor before making investment decisions.
+
+---
+
+IMPORTANT RULES:
+1. Extract ALL real numbers from BOTH tool outputs
+2. Include the FULL fundamental analysis with all sections
+3. Use USD for all currency values (never use dollar signs)
+4. Determine alignment: ALIGNED if both bullish/positive OR both bearish/negative
+5. Confidence: HIGH if 3-4 BUY signals + positive fundamentals, MEDIUM if mixed, LOW if divergent
+6. Provide specific, actionable recommendations based on the data
 """
 
 
