@@ -141,9 +141,6 @@ def format_agent_result(result: Any) -> str:
     text = text.replace('\\n', '\n')
     text = text.replace('\\t', '\t')
     text = text.replace('\\r', '\r')
-    # Normalize control characters that can break Markdown rendering
-    text = text.replace('\r\n', '\n').replace('\r', '\n')
-    text = ''.join(ch for ch in text if ch in ('\n', '\t') or ord(ch) >= 32)
     
     # Clean up any excessive newlines (more than 3 consecutive)
     while '\n\n\n\n' in text:
@@ -161,8 +158,15 @@ def build_model(
     temperature: float = DEFAULT_TEMPERATURE,
     max_tokens: int = DEFAULT_MAX_TOKENS,
 ):
-    """Create an LLM model instance for ToolCallingAgent."""
+    """
+    Create an LLM model instance for ToolCallingAgent.
+    
+    Note: LiteLLMModel passes additional kwargs to the LiteLLM completion call.
+    We pass temperature and max_tokens to control output generation.
+    """
     if provider == "litellm":
+        # LiteLLMModel accepts model_id, api_key, api_base, and additional kwargs
+        # that get passed to litellm.completion()
         kwargs = {
             "model_id": model_id,
             "temperature": temperature,
@@ -172,6 +176,15 @@ def build_model(
             kwargs["api_key"] = api_key
         if api_base:
             kwargs["api_base"] = api_base
+        
+        # Log configuration for debugging
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(
+            "Creating LiteLLMModel: model=%s, temperature=%s, max_tokens=%s",
+            model_id, temperature, max_tokens
+        )
+        
         return LiteLLMModel(**kwargs)
     else:
         token = hf_token or os.getenv("HF_TOKEN")
@@ -200,502 +213,210 @@ def build_agent(model, tools: list, max_steps: int = DEFAULT_MAX_STEPS):
 TECHNICAL_ANALYSIS_PROMPT = """You are a senior financial analyst. Analyze {symbol} using technical analysis.
 
 YOUR TASK:
-Call the comprehensive_performance_report tool to get a complete multi-strategy analysis.
+Call comprehensive_performance_report(symbol="{symbol}", period="{period}") then create a concise report.
 
-TOOL TO USE:
-- comprehensive_performance_report(symbol="{symbol}", period="{period}")
-
-After receiving the tool data, create a professional report following this EXACT format:
-
----
+REPORT FORMAT (be concise, extract real data):
 
 # {symbol} Technical Analysis Report
 
 ## Executive Summary
+[1-2 sentences: BULLISH/BEARISH/NEUTRAL outlook based on signal count]
 
-Analysis of {symbol} using four technical scoring systems reveals a [BULLISH/BEARISH/NEUTRAL] outlook.
+**Period:** {period}
 
-**Analysis Period:** {period}
+## Technical Indicators Summary
 
----
+| Strategy | Score | Signal | Key Finding |
+|----------|-------|--------|-------------|
+| Bollinger-Fibonacci | [score] | [signal] | [brief] |
+| MACD-Donchian | [score] | [signal] | [brief] |
+| Connors RSI+Z | [score] | [signal] | [brief] |
+| Dual MA | [trend%] | [signal] | [brief] |
 
-## Technical Indicators Summary Table
+## Strategy Details
 
-| Indicator System | Score/Value | Signal | Key Findings |
-|-----------------|-------------|---------|--------------|
-| **Bollinger-Fibonacci** | [score] | [BUY/SELL/HOLD] | [one-line finding] |
-| **MACD-Donchian Combined** | [score] | [BUY/SELL/HOLD] | [one-line finding] |
-| **Connors RSI + Z-Score** | [score] | [BUY/SELL/HOLD] | [one-line finding] |
-| **Dual Moving Average** | [score] | [BUY/SELL/HOLD] | [one-line finding] |
+**1. Bollinger-Fibonacci:** [Signal] - Return: [X]%, Sharpe: [X], Drawdown: [X]%
 
----
+**2. MACD-Donchian:** [Signal] - Return: [X]%, Sharpe: [X], Drawdown: [X]%
 
-## Detailed Analysis
+**3. Connors RSI+Z:** [Signal] - Return: [X]%, Sharpe: [X], Drawdown: [X]%
 
-### 1. Bollinger-Fibonacci Strategy
+**4. Dual MA:** [Signal] - Return: [X]%, Sharpe: [X], Drawdown: [X]%
 
-- **Signal:** [BUY/SELL/HOLD]
-- **Strategy Return:** [X]%
-- **Excess Return vs Buy-Hold:** [X]%
-- **Sharpe Ratio:** [X]
-- **Max Drawdown:** [X]%
+## Consensus
 
-- **Observation:** [One sentence explanation]
+- BUY: [X]/4 | SELL: [X]/4 | HOLD: [X]/4
+- Trend: [Up/Down/Sideways] | Risk: [Low/Med/High]
 
----
+## 🎯 Recommendation: **[STRONG BUY/BUY/HOLD/SELL/STRONG SELL]**
 
-### 2. MACD-Donchian Combined Strategy
+**Holders:** ✅ [action] | ❌ [avoid]
 
-- **Signal:** [BUY/SELL/HOLD]
-- **Strategy Return:** [X]%
-- **Excess Return vs Buy-Hold:** [X]%
-- **Sharpe Ratio:** [X]
-- **Max Drawdown:** [X]%
+**Buyers:** [BUY/WAIT/AVOID] - Watch: 📊 [key trigger]
 
-**Key Observation:** [One sentence explanation]
+**Risk:** Position max [X]% portfolio, Stop at [level]
 
 ---
+*Disclaimer: Educational purposes only.*
 
-### 3. Connors RSI + Z-Score Combined Strategy
-
-- **Signal:** [BUY/SELL/HOLD]
-- **Strategy Return:** [X]%
-- **Excess Return vs Buy-Hold:** [X]%
-- **Sharpe Ratio:** [X]
-- **Max Drawdown:** [X]%
-
-**Key Observation:** [One sentence explanation]
-
----
-
-### 4. Dual Moving Average (50/200 EMA) Strategy
-
-- **Signal:** [BUY/SELL/HOLD]
-- **Strategy Return:** [X]%
-- **Excess Return vs Buy-Hold:** [X]%
-- **Sharpe Ratio:** [X]
-- **Max Drawdown:** [X]%
-
-**Key Observation:** [One sentence explanation]
-
----
-
-## Consensus Analysis
-
-### Overall Technical Health: **[BULLISH/BEARISH/NEUTRAL]**
-
-| Metric | Status |
-|--------|--------|
-| **Trend Direction** | [Upward/Downward/Sideways] |
-| **Momentum** | [Positive/Negative/Neutral] |
-| **Risk Level** | [Low/Medium/High] |
-
-### Signal Breakdown
-
-- **BUY Signals:** [X]/4
-- **SELL Signals:** [X]/4
-- **HOLD Signals:** [X]/4
-- **Consensus Direction:** [BULLISH/BEARISH/NEUTRAL]
-
----
-
-## 🎯 FINAL RECOMMENDATION: **[BUY/SELL/HOLD/STRONG BUY/STRONG SELL/AVOID]**
-
-### Action Plan
-
-**For Current {symbol} Holders:**
-- ✅ [Action 1]
-- ✅ [Action 2]
-- ❌ [What NOT to do]
-
-**For Potential Buyers:**
-- [BUY/WAIT/AVOID] at current levels
-- ⏳ Key triggers to watch:
-  - 📊 [Trigger 1]
-  - 📊 [Trigger 2]
-
----
-
-## Risk Management
-
-- **Position Size:** Maximum [X]% of portfolio
-- **Stop Loss:** [Level based on technical support]
-- **Take Profit Target:** [Level based on technical resistance]
-
----
-
-## Conclusion
-
-[2-3 sentence summary connecting all the data points to the final recommendation. Be specific about WHY you're recommending this action based on the technical indicators.]
-
-**Disclaimer:** This analysis is for educational purposes only. Always conduct your own research before investing.
-
----
-
-IMPORTANT INSTRUCTIONS:
-1. Extract REAL numbers from the tool output - do not make up values
-2. The table format with | is REQUIRED for the summary
-3. Use emojis (✅, ❌, ⏳, 📊, 🎯) to make the report scannable
-4. Be specific and data-driven in your observations
-5. Use USD for currency (never use the dollar sign symbol)
+RULES:
+1. Extract REAL numbers from tool output
+2. Keep each section brief (1-2 lines max)
+3. Use USD for currency (no dollar signs)
+4. Total report should be under 400 words
 """
 
-MARKET_SCANNER_PROMPT = """You are a senior financial analyst. Scan and rank these stocks: {symbols}
+MARKET_SCANNER_PROMPT = """You are a senior financial analyst. Scan these stocks: {symbols}
 
-YOUR TASK:
-Call unified_market_scanner to analyze all stocks at once.
+Call unified_market_scanner(symbols="{symbols}", period="{period}", output_format="detailed")
 
-TOOL TO USE:
-- unified_market_scanner(symbols="{symbols}", period="{period}", output_format="detailed")
-
-After receiving the tool data, create a professional report following this format:
-
----
+Create a CONCISE report:
 
 # Market Scanner Report
 
-## Executive Summary
+## Summary
+Scanned {symbol_count} stocks | Period: {period}
 
-Scanned {symbol_count} stocks using four technical strategies.
+## Rankings
 
-**Stocks Analyzed:** {symbols}
+| Rank | Symbol | BUY Signals | Outlook | Action |
+|------|--------|-------------|---------|--------|
+| 1 | [SYM] | [X]/4 | [BULL/BEAR] | [BUY/HOLD/SELL] |
+| 2 | [SYM] | [X]/4 | [BULL/BEAR] | [BUY/HOLD/SELL] |
+[continue for each stock...]
 
-**Analysis Period:** {period}
+## 🎯 Top Picks (3+ BUY signals)
+🥇 **[SYM]** - [X]/4 BUY - [reason]
+🥈 **[SYM]** - [X]/4 BUY - [reason]
 
----
+## Avoid (0-1 BUY signals)
+- **[SYM]** - [reason]
 
-## Stock Rankings Summary Table
+## Market Outlook: [BULLISH/BEARISH/NEUTRAL]
 
-| Rank | Symbol | BUY Signals | Overall Signal | Recommendation |
-|------|--------|-------------|----------------|----------------|
-| 1 | [SYMBOL] | [X]/4 | [BULLISH/BEARISH/NEUTRAL] | [STRONG BUY/BUY/HOLD/SELL/AVOID] |
-| 2 | [SYMBOL] | [X]/4 | [BULLISH/BEARISH/NEUTRAL] | [STRONG BUY/BUY/HOLD/SELL/AVOID] |
-| ... | ... | ... | ... | ... |
-
----
-
-## Detailed Stock Analysis
-
-### 🥇 Rank 1: [SYMBOL]
-
-**Signal Breakdown:**
-
-| Strategy | Signal | Return vs B&H |
-|----------|--------|---------------|
-| Bollinger-Fibonacci | [SIGNAL] | [X]% |
-| MACD-Donchian | [SIGNAL] | [X]% |
-| Connors RSI-ZScore | [SIGNAL] | [X]% |
-| Dual Moving Average | [SIGNAL] | [X]% |
-
-**Verdict:** [1-2 sentence summary]
-
----
-
-[Repeat for each stock...]
-
----
-
-## 🎯 TOP PICKS
-
-### Best Opportunities (3+ BUY signals):
-1. **[SYMBOL]** - [X]/4 BUY signals - [Brief reason]
-2. **[SYMBOL]** - [X]/4 BUY signals - [Brief reason]
-
-### Stocks to Avoid (0-1 BUY signals):
-1. **[SYMBOL]** - [X]/4 BUY signals - [Brief reason]
-
----
-
-## Market Sentiment
-
-- **Average BUY Signals:** [X.X]/4 across all stocks
-- **Market Outlook:** [BULLISH/BEARISH/NEUTRAL]
-- **Recommendation:** [Summary action]
-
----
-
-IMPORTANT: Extract REAL data from the tool output. Use tables for clarity.
+*Extract real data. Keep brief.*
 """
 
-FUNDAMENTAL_ANALYSIS_PROMPT = """You are a senior financial analyst. Analyze {symbol} fundamentals.
+FUNDAMENTAL_ANALYSIS_PROMPT = """Analyze {symbol} fundamentals.
 
-YOUR TASK:
-Call fundamental_analysis_report to get complete financial statement analysis.
+Call fundamental_analysis_report(symbol="{symbol}", period="{period}")
 
-TOOL TO USE:
-- fundamental_analysis_report(symbol="{symbol}", period="{period}")
+Create a CONCISE report:
 
-After receiving the tool data, create a professional report following this format:
+# {symbol} Fundamental Analysis
 
----
+## Summary
+**Health:** [STRONG/MODERATE/WEAK] | **Grade:** [A/B/C/D/F] | **Period:** {period}
 
-# {symbol} Fundamental Analysis Report
+## Key Metrics
 
-## Executive Summary
-
-**Company:** {symbol}
-
-**Analysis Period:** {period}
-
-**Financial Health:** [STRONG/MODERATE/WEAK]
-
-**Investment Grade:** [A/B/C/D/F]
-
----
-
-## Key Metrics Summary Table
-
-| Category | Metric | Value | Assessment |
-|----------|--------|-------|------------|
-| **Profitability** | ROE | [X]% | [Good/Fair/Poor] |
-| **Profitability** | Net Margin | [X]% | [Good/Fair/Poor] |
-| **Leverage** | Debt/Equity | [X] | [Good/Fair/Poor] |
-| **Liquidity** | Current Ratio | [X] | [Good/Fair/Poor] |
-| **Valuation** | P/E Ratio | [X] | [Good/Fair/Poor] |
-| **Growth** | Revenue Growth | [X]% | [Good/Fair/Poor] |
-
----
-
-## Financial Statements Analysis
-
-### Income Statement Highlights
-
-- **Revenue:** [X] USD
-- **Net Income:** [X] USD
-- **Gross Margin:** [X]%
-- **Operating Margin:** [X]%
-
-### Balance Sheet Highlights
-
-- **Total Assets:** [X] USD
-- **Total Debt:** [X] USD
-- **Shareholders Equity:** [X] USD
-
-### Cash Flow Highlights
-
-- **Operating Cash Flow:** [X] USD
-- **Free Cash Flow:** [X] USD
-- **CapEx:** [X] USD
-
----
-
-## Strengths and Weaknesses
-
-### ✅ Strengths
-1. [Strength 1 with data]
-2. [Strength 2 with data]
-
-### ❌ Weaknesses
-1. [Weakness 1 with data]
-2. [Weakness 2 with data]
-
----
-
-## 🎯 RECOMMENDATION: **[BUY/SELL/HOLD]**
-
-**Rationale:** [2-3 sentences explaining why based on the fundamentals]
-
----
-
-IMPORTANT: Extract REAL numbers from the tool output. Use USD for currency.
-"""
-
-MULTI_SECTOR_PROMPT = """You are a senior financial analyst. Compare these sectors:
-
-{sector_details}
-
-Analysis Period: {period}
-
-YOUR TASK:
-For each sector, call unified_market_scanner to analyze the stocks.
-
-TOOL TO USE:
-- unified_market_scanner(symbols="[stocks]", period="{period}", output_format="detailed")
-
-After receiving ALL sector data, create a professional report following this format:
-
----
-
-# Multi-Sector Analysis Report
-
-## Executive Summary
-
-**Sectors Analyzed:** [List sectors]
-
-**Analysis Period:** {period}
-
-**Strongest Sector:** [Name]
-
-**Weakest Sector:** [Name]
-
----
-
-## Sector Rankings Summary Table
-
-| Rank | Sector | Avg BUY Signals | Best Stock | Sector Outlook |
-|------|--------|-----------------|------------|----------------|
-| 1 | [Sector] | [X.X]/4 | [SYMBOL] | [BULLISH/NEUTRAL/BEARISH] |
-| 2 | [Sector] | [X.X]/4 | [SYMBOL] | [BULLISH/NEUTRAL/BEARISH] |
-| ... | ... | ... | ... | ... |
-
----
-
-## Sector-by-Sector Analysis
-
-### 🥇 Rank 1: [SECTOR NAME]
-
-**Stocks Analyzed:** [List]
-
-**Average BUY Signals:** [X.X]/4
-
-| Stock | BUY Signals | Recommendation |
-|-------|-------------|----------------|
-| [SYM] | [X]/4 | [REC] |
-| [SYM] | [X]/4 | [REC] |
-
-**Sector Verdict:** [1-2 sentences]
-
----
-
-[Repeat for each sector...]
-
----
-
-## 🎯 TOP PICKS ACROSS ALL SECTORS
-
-1. **[SYMBOL]** ([Sector]) - [X]/4 BUY signals
-2. **[SYMBOL]** ([Sector]) - [X]/4 BUY signals
-3. **[SYMBOL]** ([Sector]) - [X]/4 BUY signals
-
----
-
-## Investment Strategy
-
-**Recommended Sector Allocation:**
-- [Sector 1]: [X]% - [Reason]
-- [Sector 2]: [X]% - [Reason]
-
----
-
-IMPORTANT: Extract REAL data from tool outputs. Use tables for clarity.
-"""
-
-COMBINED_ANALYSIS_PROMPT = """You are a senior investment analyst. Perform complete analysis of {symbol}.
-
-YOUR TASK:
-Combine BOTH technical and fundamental analysis.
-
-TOOLS TO USE:
-1. comprehensive_performance_report(symbol="{symbol}", period="{technical_period}") - for technicals
-2. fundamental_analysis_report(symbol="{symbol}", period="{fundamental_period}") - for fundamentals
-
-After receiving BOTH tool outputs, create a professional report following this format:
-
----
-
-# {symbol} Combined Investment Analysis
-
-## Executive Summary
-
-**Symbol:** {symbol}
-
-**Technical Period:** {technical_period}
-
-**Fundamental Period:** {fundamental_period}
-
-**COMBINED RECOMMENDATION:** [STRONG BUY/BUY/HOLD/SELL/STRONG SELL]
-
-**Confidence Level:** [HIGH/MEDIUM/LOW]
-
-**Technical/Fundamental Alignment:** [ALIGNED/DIVERGENT/MIXED]
-
----
-
-## Technical Analysis Summary
-
-### Technical Indicators Table
-
-| Strategy | Signal | Return vs B&H | Sharpe Ratio |
-|----------|--------|---------------|--------------|
-| Bollinger-Fibonacci | [SIGNAL] | [X]% | [X] |
-| MACD-Donchian | [SIGNAL] | [X]% | [X] |
-| Connors RSI-ZScore | [SIGNAL] | [X]% | [X] |
-| Dual Moving Average | [SIGNAL] | [X]% | [X] |
-
-**Technical Verdict:** [BULLISH/BEARISH/NEUTRAL] with [X]/4 BUY signals
-
----
-
-## Fundamental Analysis Summary
-
-### Key Metrics Table
-
-| Metric | Value | Assessment |
-|--------|-------|------------|
+| Metric | Value | Rating |
+|--------|-------|--------|
 | ROE | [X]% | [Good/Fair/Poor] |
+| Net Margin | [X]% | [Good/Fair/Poor] |
 | Debt/Equity | [X] | [Good/Fair/Poor] |
 | Current Ratio | [X] | [Good/Fair/Poor] |
-| P/E Ratio | [X] | [Good/Fair/Poor] |
+| P/E | [X] | [Good/Fair/Poor] |
 
-**Fundamental Verdict:** [STRONG/MODERATE/WEAK] financial health
+## Financials
+- Revenue: [X] USD | Net Income: [X] USD
+- Assets: [X] USD | Debt: [X] USD
+- Op. Cash Flow: [X] USD | Free Cash Flow: [X] USD
 
----
+## Assessment
+✅ Strengths: [1-2 key points]
+❌ Weaknesses: [1-2 key points]
 
-## Alignment Analysis
+## 🎯 Recommendation: **[BUY/HOLD/SELL]**
+[1-2 sentence rationale]
 
-| Aspect | Technical View | Fundamental View | Alignment |
-|--------|----------------|------------------|-----------|
-| Overall | [BULLISH/BEARISH/NEUTRAL] | [POSITIVE/NEGATIVE/NEUTRAL] | [✅/❌] |
-| Momentum | [Status] | [Growth trend] | [✅/❌] |
-| Risk | [Level] | [Financial stability] | [✅/❌] |
+*Extract real numbers. Use USD.*
+"""
 
-**Alignment Status:** [ALIGNED/DIVERGENT/MIXED]
+MULTI_SECTOR_PROMPT = """Compare these sectors:
+{sector_details}
 
----
+Period: {period}
 
-## 🎯 FINAL RECOMMENDATION: **[RECOMMENDATION]**
+For each sector, call unified_market_scanner(symbols="[stocks]", period="{period}", output_format="detailed")
 
-### Why This Recommendation?
+Create a CONCISE report:
 
-**Technical Factors:**
-- [Factor 1 with data]
-- [Factor 2 with data]
+# Multi-Sector Analysis
 
-**Fundamental Factors:**
-- [Factor 1 with data]
-- [Factor 2 with data]
+## Summary
+**Strongest:** [Sector] | **Weakest:** [Sector] | **Period:** {period}
 
-### Action Plan
+## Sector Rankings
 
-**For Current Holders:**
-- ✅ [Action 1]
-- ✅ [Action 2]
+| Rank | Sector | Avg BUY | Best Stock | Outlook |
+|------|--------|---------|------------|---------|
+| 1 | [Sector] | [X.X]/4 | [SYM] | [BULL/BEAR] |
+| 2 | [Sector] | [X.X]/4 | [SYM] | [BULL/BEAR] |
 
-**For Potential Buyers:**
-- [Action with conditions]
+## Sector Details
 
-### Risk Management
+**[Sector 1]:** [X.X]/4 avg - Top: [SYM] ([X]/4)
 
-- **Position Size:** Max [X]% of portfolio
-- **Stop Loss:** Based on [technical level]
-- **Time Horizon:** [Short/Medium/Long] term
+**[Sector 2]:** [X.X]/4 avg - Top: [SYM] ([X]/4)
 
----
+## 🎯 Top Picks Across Sectors
+1. **[SYM]** ([Sector]) - [X]/4 BUY
+2. **[SYM]** ([Sector]) - [X]/4 BUY
 
-## Conclusion
+## Allocation
+- [Sector 1]: [X]% - [reason]
+- [Sector 2]: [X]% - [reason]
 
-[3-4 sentences connecting both technical and fundamental analysis to justify the final recommendation. Be specific about the alignment or divergence between the two analyses.]
+*Extract real data. Keep brief.*
+"""
 
-**Disclaimer:** This analysis is for educational purposes only.
+COMBINED_ANALYSIS_PROMPT = """Complete analysis of {symbol}.
 
----
+TOOLS:
+1. comprehensive_performance_report(symbol="{symbol}", period="{technical_period}")
+2. fundamental_analysis_report(symbol="{symbol}", period="{fundamental_period}")
 
-IMPORTANT: 
-1. Extract REAL data from BOTH tool outputs
-2. Use tables for clarity and scannability
-3. Use emojis (✅, ❌, 🎯) to highlight key points
-4. Explicitly address whether technical and fundamental views ALIGN or DIVERGE
-5. Use USD for currency values
+Create a CONCISE report:
+
+# {symbol} Combined Analysis
+
+## Summary
+**Recommendation:** [STRONG BUY/BUY/HOLD/SELL] | **Confidence:** [HIGH/MED/LOW]
+**Alignment:** [ALIGNED/DIVERGENT] (Tech vs Fundamental)
+
+## Technical Summary (Period: {technical_period})
+
+| Strategy | Signal | Excess Return |
+|----------|--------|---------------|
+| Bollinger-Fib | [SIG] | [X]% |
+| MACD-Donchian | [SIG] | [X]% |
+| Connors RSI-Z | [SIG] | [X]% |
+| Dual MA | [SIG] | [X]% |
+
+**Technical:** [BULLISH/BEARISH/NEUTRAL] - [X]/4 BUY signals
+
+## Fundamental Summary (Period: {fundamental_period})
+
+| Metric | Value | Rating |
+|--------|-------|--------|
+| ROE | [X]% | [G/F/P] |
+| Debt/Eq | [X] | [G/F/P] |
+| P/E | [X] | [G/F/P] |
+
+**Fundamental:** [STRONG/MODERATE/WEAK] health
+
+## Alignment
+- Technical: [BULL/BEAR] | Fundamental: [POS/NEG] | Match: [✅/❌]
+
+## 🎯 Recommendation: **[ACTION]**
+**Why:** [1-2 sentences combining both analyses]
+
+**Holders:** ✅ [action]
+**Buyers:** [BUY/WAIT] - [condition]
+**Risk:** Max [X]% position, Stop at [level]
+
+*Educational purposes only.*
 """
 
 
