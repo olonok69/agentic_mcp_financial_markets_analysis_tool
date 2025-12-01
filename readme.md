@@ -20,7 +20,7 @@ This application provides **5 distinct analysis types** through a modern web int
 |--------------|-------------|----------|
 | **📈 Technical Analysis** | 4 trading strategies on single stock | Deep dive into price patterns |
 | **🔍 Market Scanner** | Compare multiple stocks simultaneously | Find best opportunities |
-| **📊 Fundamental Analysis** | Financial statements interpretation | Assess company health |
+| **💰 Fundamental Analysis** | Financial statements interpretation | Assess company health |
 | **🌐 Multi-Sector Analysis** | Cross-sector comparison | Portfolio diversification |
 | **🔄 Combined Analysis** | Technical + Fundamental together | Complete investment thesis |
 
@@ -213,7 +213,7 @@ mcp_financial_markets_analysis_tool/
 │   │   ├── connors_zscore.py        # Connors RSI + Z-Score
 │   │   ├── dual_moving_average.py   # 50/200 EMA Crossover
 │   │   ├── bollinger_zscore.py      # Bollinger + Z-Score
-│   │   ├── fundamental_analysis.py  # Financial Statements
+│   │   ├── fundamental_analysis.py  # Financial Statements (70+ row aliases)
 │   │   ├── performance_tools.py     # Backtesting Tools
 │   │   └── unified_market_scanner.py# Multi-Stock Scanner
 │   ├── utils/
@@ -301,8 +301,8 @@ The sidebar now includes an agent type selector:
 | Tab | Description | Recommended Agent |
 |-----|-------------|-------------------|
 | 📈 Technical | Single stock, 4 strategies | Either |
-| 🔍 Scanner | Multi-stock comparison | 🐍 CodeAgent |
-| 📊 Fundamental | Financial statements | Either |
+| 🔍 Scanner | Multi-stock comparison (5 strategies) | 🐍 CodeAgent |
+| 💰 Fundamental | Financial statements | Either |
 | 🌐 Multi-Sector | Cross-sector analysis | 🐍 CodeAgent |
 | 🔄 Combined | Tech + Fundamental | Either |
 
@@ -347,10 +347,12 @@ HF_TOKEN=hf_your-huggingface-token
 SMOLAGENT_MODEL_ID=gpt-4o           # Recommended for CodeAgent
 SMOLAGENT_MODEL_PROVIDER=litellm     # litellm or inference
 
-# Agent Configuration (NEW)
+# Agent Configuration
 SMOLAGENT_AGENT_TYPE=code_agent      # tool_calling or code_agent
 SMOLAGENT_EXECUTOR=local             # local, e2b, or docker
 SMOLAGENT_MAX_STEPS=25               # Max reasoning steps
+SMOLAGENT_TEMPERATURE=0.1            # Low for deterministic outputs
+SMOLAGENT_MAX_TOKENS=8192            # Prevents output truncation
 
 # Optional - Defaults
 DEFAULT_ANALYSIS_PERIOD=1y
@@ -380,8 +382,8 @@ The **Model Context Protocol Server** provides all financial analysis tools.
 **Key Features:**
 - 5 technical analysis strategies
 - Performance backtesting with metrics
-- Fundamental analysis from financial statements
-- Multi-stock market scanner
+- Fundamental analysis with 70+ row aliases for robust yfinance data extraction
+- Multi-stock unified market scanner
 
 📚 **Detailed Documentation:** [server/README.md](server/README.md)
 
@@ -390,8 +392,8 @@ The **Model Context Protocol Server** provides all financial analysis tools.
 The **smolagents-powered orchestration layer** with dual agent support.
 
 **Key Files:**
-- `main.py` - ToolCallingAgent implementation
-- `main_codeagent.py` - CodeAgent implementation
+- `main.py` - ToolCallingAgent implementation (HIGH-LEVEL tools)
+- `main_codeagent.py` - CodeAgent implementation (LOW-LEVEL tools)
 - `api.py` - FastAPI endpoints with agent selection
 - `tools.py` - MCP tool wrappers
 
@@ -437,13 +439,38 @@ All endpoints now accept `agent_type` parameter:
   "symbol": "AAPL",
   "analysis_type": "technical",
   "duration_seconds": 35.2,
-  "agent_type": "code_agent"
+  "agent_type": "code_agent",
+  "tools_approach": "LOW-LEVEL tools (4 strategies + Python code orchestration)"
 }
 ```
 
 ---
 
 ## ⚙️ Configuration
+
+### Environment Variables
+
+```bash
+# LLM Configuration
+OPENAI_API_KEY=sk-...           # Required for OpenAI models
+HF_TOKEN=hf_...                 # Required for HuggingFace models
+OPENAI_BASE_URL=                # Optional: Custom endpoint
+
+# Model Settings
+SMOLAGENT_MODEL_ID=gpt-4o       # Model to use
+SMOLAGENT_MODEL_PROVIDER=litellm # litellm (OpenAI) or inference (HuggingFace)
+SMOLAGENT_TEMPERATURE=0.1       # Low value for deterministic outputs
+SMOLAGENT_MAX_TOKENS=8192       # Prevents output truncation
+
+# Agent Settings
+SMOLAGENT_AGENT_TYPE=code_agent  # tool_calling or code_agent
+SMOLAGENT_EXECUTOR=local         # local, e2b, or docker
+SMOLAGENT_MAX_STEPS=25           # Max reasoning steps
+
+# Analysis Defaults
+DEFAULT_ANALYSIS_PERIOD=1y
+DEFAULT_SCANNER_SYMBOLS=AAPL,MSFT,GOOGL,AMZN
+```
 
 ### Supported LLM Models
 
@@ -459,6 +486,35 @@ All endpoints now accept `agent_type` parameter:
 ### Analysis Periods
 
 Valid periods: `1d`, `5d`, `1mo`, `3mo`, `6mo`, `1y`, `2y`, `5y`, `10y`, `ytd`, `max`
+
+---
+
+## 📝 Output Formatting Rules
+
+All analysis outputs follow strict formatting guidelines for clean rendering:
+
+| Rule | Description |
+|------|-------------|
+| **Currency** | Use "USD" prefix instead of "$" (avoids LaTeX interpretation in Streamlit) |
+| **Tables** | Avoid pipe characters in markdown tables (render poorly in UI) |
+| **Data Points** | Each metric on its own line for clarity |
+| **Headers** | Numbered sections with clear hierarchy |
+| **No Italics** | Avoid `*text*` formatting |
+
+### Strategy Count by Analysis Type
+
+| Analysis Type | Tool Used | Strategies |
+|--------------|-----------|------------|
+| Technical Analysis | `comprehensive_performance_report` | 4 strategies |
+| Market Scanner | `unified_market_scanner` | 5 strategies |
+| Multi-Sector | `unified_market_scanner` | 5 strategies |
+
+**Market Scanner Strategies:**
+1. Bollinger Bands Z-Score
+2. Bollinger Bands and Fibonacci Retracement
+3. MACD-Donchian Combined
+4. Connors RSI and Z-Score Combined
+5. Dual Moving Average Crossover
 
 ---
 
@@ -509,10 +565,41 @@ When using CodeAgent:
 | Issue | Solution |
 |-------|----------|
 | "CodeAgent not available" | Ensure `main_codeagent.py` exists in `stock_analyzer_bot/` |
-| "Code execution failed" | Check Python syntax in LLM output, try different model |
+| "Code execution failed" | Check Python syntax in LLM output, try gpt-4o model |
 | "MCP server not found" | Verify `server/main.py` exists at project root |
+| "Connection refused" | Start FastAPI with `uvicorn stock_analyzer_bot.api:app --port 8000` |
 | "Timeout" | Reduce stocks or increase timeout; use CodeAgent for multi-stock |
 | "Agent stopped early" | Increase `max_steps` parameter |
+| "Truncated output" | Increase `SMOLAGENT_MAX_TOKENS` to 8192+ |
+| "LaTeX formatting errors" | Ensure code uses USD prefix instead of $ symbol |
+| "Missing strategies in scanner" | Verify unified_market_scanner uses "detailed" output format |
+
+---
+
+## 🔄 Recent Changes
+
+### v2.3.0 - Output Formatting & Stability
+
+- **Temperature Configuration:** Set to 0.1 for more deterministic outputs
+- **Token Limits:** Increased default to 8192 to prevent truncation
+- **Currency Formatting:** Changed from "$" to "USD" prefix (avoids LaTeX issues)
+- **Market Scanner:** Fixed missing MACD-Donchian and Connors RSI-ZScore strategies
+- **Template Escaping:** Fixed Python format conflicts in prompt templates
+- **Response Formatting:** Added `format_agent_result()` helper for clean output
+
+### v2.2.0 - Fundamental Analysis Improvements
+
+- **Row Aliases:** Expanded to 70+ aliases for robust yfinance data extraction
+- **Multi-tier Matching:** Exact → Alias → Fuzzy substring matching
+- **Financial Ratios:** Added comprehensive calculations across 4 categories
+- **Fallback Handling:** Graceful degradation when data extraction fails
+
+### v2.1.0 - Dual Agent Architecture
+
+- **CodeAgent:** Added Python code execution for efficient multi-stock loops
+- **Executor Options:** Support for local, e2b, and docker sandboxes
+- **Tool Categories:** Separated HIGH-LEVEL and LOW-LEVEL tool collections
+- **Agent Selection:** API parameter to choose agent type per request
 
 ---
 

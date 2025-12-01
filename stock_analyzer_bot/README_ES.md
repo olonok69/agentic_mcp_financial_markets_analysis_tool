@@ -1,403 +1,575 @@
-# 🤖 Stock Analyzer Bot
+# 📊 Stock Analyzer Bot
 
-Capa de orquestación de IA impulsada por Smolagents que conecta LLMs a herramientas de análisis financiero MCP. Este módulo soporta **dos arquitecturas de agentes**: ToolCallingAgent (basado en JSON) y CodeAgent (basado en código Python).
-
----
-
-## 📋 Tabla de Contenidos
-
-- [Descripción General](#descripción-general)
-- [Tipos de Agentes](#tipos-de-agentes)
-- [Arquitectura](#arquitectura)
-- [Referencia de Módulos](#referencia-de-módulos)
-- [Endpoints de API](#endpoints-de-api)
-- [Ejemplos de Uso](#ejemplos-de-uso)
-- [Configuración](#configuración)
-- [Solución de Problemas](#solución-de-problemas)
+La **capa de orquestación con smolagents** del proyecto MCP Financial Markets Analysis Tool. Este módulo ofrece dos arquitecturas de agente para ejecutar análisis financieros mediante herramientas MCP.
 
 ---
 
-## Descripción General
+## 🎯 Descripción general
 
-El Stock Analyzer Bot es la **capa de orquestación de IA** que:
+El módulo implementa dos tipos de agentes que orquestan las herramientas MCP de finanzas:
 
-1. Recibe solicitudes de análisis desde la API
-2. Usa un LLM (OpenAI/HuggingFace) para decidir qué herramientas llamar
-3. Ejecuta herramientas MCP vía la conexión del cliente
-4. Sintetiza resultados en informes markdown profesionales
+| Tipo de agente | Implementación | Herramientas usadas | Ideal para |
+|----------------|----------------|---------------------|-------------|
+| **ToolCallingAgent** | `main.py` | ALTO NIVEL (1 llamada = informe completo) | Producción, fiabilidad |
+| **CodeAgent** | `main_codeagent.py` | BAJO NIVEL (bucles en Python) | Velocidad, transparencia |
 
-### Características Clave
-
-- **Soporte Dual de Agentes**: ToolCallingAgent O CodeAgent
-- **5 Tipos de Análisis**: Técnico, Escáner, Fundamental, Multi-Sector, Combinado
-- **Integración MCP**: Conexión perfecta a herramientas financieras
-- **Agnóstico de LLM**: Funciona con OpenAI, HuggingFace y más
+Ambos agentes ofrecen las mismas capacidades de análisis, pero difieren en su forma de ejecución.
 
 ---
 
-## Tipos de Agentes
-
-### 🔧 ToolCallingAgent (`main.py`)
-
-La implementación original usando llamadas de herramientas basadas en JSON.
-
-**Cómo Funciona:**
-```
-Usuario: "Analiza AAPL"
-     ↓
-LLM: {"tool": "bollinger_fibonacci_analysis", "args": {"symbol": "AAPL"}}
-     ↓
-Ejecutar herramienta → Retornar resultado
-     ↓
-LLM: {"tool": "macd_donchian_analysis", "args": {"symbol": "AAPL"}}
-     ↓
-Ejecutar herramienta → Retornar resultado
-     ↓
-... (repetir para cada herramienta)
-     ↓
-LLM: Sintetizar todos los resultados → Generar informe
-```
-
-**Características:**
-- Una llamada de herramienta por ronda LLM
-- Ejecución secuencial
-- Simple y predecible
-- Sin riesgos de ejecución de código
-
-### 🐍 CodeAgent (`main_codeagent.py`)
-
-La implementación avanzada donde el LLM escribe código Python.
-
-**Cómo Funciona:**
-```
-Usuario: "Analiza AAPL, MSFT, GOOGL"
-     ↓
-LLM genera código Python:
-┌──────────────────────────────────────────────────┐
-│ results = {}                                      │
-│ for stock in ["AAPL", "MSFT", "GOOGL"]:          │
-│     results[stock] = {                            │
-│         "bb": bollinger_fibonacci_analysis(stock),│
-│         "macd": macd_donchian_analysis(stock),   │
-│     }                                             │
-│                                                   │
-│ # Clasificar por rendimiento                      │
-│ ranked = sorted(results.items(), key=...)        │
-│ final_answer(generate_report(ranked))            │
-└──────────────────────────────────────────────────┘
-     ↓
-Ejecutor Python ejecuta código → Llama todas las herramientas
-     ↓
-Retornar informe final
-```
-
-**Características:**
-- Múltiples herramientas en una ronda LLM
-- Basado en loops para multi-acción
-- Puede almacenar variables y calcular
-- Requiere sandbox de ejecución de código
-
-### Tabla Comparativa
-
-| Característica | ToolCallingAgent | CodeAgent |
-|----------------|-----------------|-----------|
-| Llamadas de herramienta por ronda | 1 | Muchas (vía loops) |
-| Eficiencia multi-acción | ⚠️ Lento | ✅ Rápido |
-| Almacenamiento de variables | ❌ No | ✅ Sí |
-| Depuración | ✅ Fácil | ⚠️ Más difícil |
-| Seguridad | ✅ Seguro | ⚠️ Necesita sandbox |
-| Requisitos LLM | Cualquier LLM | Bueno en Python |
-
----
-
-## Arquitectura
-
-### Diagrama de Flujo de Datos
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         STOCK ANALYZER BOT                               │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                         │
-│  ┌─────────────┐                                                        │
-│  │   api.py    │  ← Endpoints FastAPI                                   │
-│  │             │    Recibe solicitudes, selecciona tipo de agente       │
-│  └──────┬──────┘                                                        │
-│         │                                                               │
-│         ▼                                                               │
-│  ┌──────────────────────────────────────────────────┐                   │
-│  │              SELECCIÓN DE AGENTE                 │                   │
-│  │  ┌──────────────────┐  ┌──────────────────────┐  │                   │
-│  │  │     main.py      │  │  main_codeagent.py   │  │                   │
-│  │  │ ToolCallingAgent │  │     CodeAgent        │  │                   │
-│  │  │   (Basado JSON)  │  │  (Código Python)     │  │                   │
-│  │  └────────┬─────────┘  └──────────┬───────────┘  │                   │
-│  └───────────┼───────────────────────┼──────────────┘                   │
-│              │                       │                                  │
-│              └───────────┬───────────┘                                  │
-│                          ▼                                              │
-│  ┌─────────────────────────────────────────────────┐                    │
-│  │               tools.py                          │                    │
-│  │    Funciones decoradas con @tool                │                    │
-│  │    bollinger_fibonacci_analysis()               │                    │
-│  │    macd_donchian_analysis()                     │                    │
-│  │    connors_zscore_analysis()                    │                    │
-│  │    dual_moving_average_analysis()               │                    │
-│  │    fundamental_analysis_report()                │                    │
-│  └──────────────────────┬──────────────────────────┘                    │
-│                         │                                               │
-│                         ▼                                               │
-│  ┌─────────────────────────────────────────────────┐                    │
-│  │            mcp_client.py                        │                    │
-│  │    MCPFinanceSession                            │                    │
-│  │    - Gestiona conexión al servidor MCP          │                    │
-│  │    - Envía llamadas de herramientas vía stdio   │                    │
-│  └──────────────────────┬──────────────────────────┘                    │
-│                         │ stdio                                         │
-└─────────────────────────┼───────────────────────────────────────────────┘
-                          │
-                          ▼
-              ┌───────────────────────┐
-              │    MCP SERVER         │
-              │   (server/main.py)    │
-              │   Herramientas        │
-              │   Financieras         │
-              └───────────────────────┘
-```
-
-### Estructura de Archivos
+## 📁 Estructura del módulo
 
 ```
 stock_analyzer_bot/
 ├── __init__.py              # Inicialización del paquete
 ├── main.py                  # Implementación ToolCallingAgent
-├── main_codeagent.py        # Implementación CodeAgent (NUEVO)
-├── api.py                   # Endpoints REST de FastAPI
-├── tools.py                 # Wrappers @tool de Smolagents
-├── mcp_client.py            # Gestor de conexión al servidor MCP
+├── main_codeagent.py        # Implementación CodeAgent
+├── api.py                   # Endpoints FastAPI con selección de agente
+├── tools.py                 # Wrappers de herramientas MCP
+├── mcp_client.py            # Gestión de la sesión MCP
 └── README.md                # Este archivo
 ```
 
-### Flujo de Datos
+---
 
+## 🔧 Categorías de herramientas
+
+### Herramientas de ALTO NIVEL (ToolCallingAgent)
+
+Realizan todo el trabajo en **una llamada MCP**. El servidor MCP maneja toda la lógica interna.
+
+```python
+from stock_analyzer_bot.tools import HIGH_LEVEL_TOOLS
+
+# Herramientas disponibles:
+# - comprehensive_performance_report: 4 estrategias + informe completo (1 llamada)
+# - unified_market_scanner: escáner de múltiples acciones con ranking (1 llamada)
+# - fundamental_analysis_report: análisis fundamental (1 llamada)
 ```
-Solicitud del Usuario
-     │
-     ▼
-┌─────────────────────────────────────────────────────────────┐
-│ 1. Endpoint FastAPI recibe la solicitud                     │
-│    - Valida entrada (símbolo, período, etc.)                │
-│    - Selecciona tipo de agente (tool_calling o code_agent)  │
-│    - Llama la función run_*_analysis() apropiada            │
-└─────────────────────────────────────────────────────────────┘
-     │
-     ▼
-┌─────────────────────────────────────────────────────────────┐
-│ 2. Función de Análisis (main.py o main_codeagent.py)        │
-│    - Construye modelo LLM (OpenAI/HuggingFace)              │
-│    - Crea agente (ToolCallingAgent O CodeAgent)             │
-│    - Formatea prompt con parámetros del usuario             │
-│    - Ejecuta agent.run(prompt)                              │
-└─────────────────────────────────────────────────────────────┘
-     │
-     ▼
-┌─────────────────────────────────────────────────────────────┐
-│ 3. Smolagents Agent (ToolCallingAgent O CodeAgent)          │
-│    - LLM lee el prompt y decide qué herramientas llamar     │
-│    - ToolCallingAgent: Una herramienta por turno LLM        │
-│    - CodeAgent: Múltiples herramientas vía código Python    │
-│    - Para cada llamada de herramienta:                      │
-│      a. Agente genera nombre de herramienta + parámetros    │
-│      b. Wrapper de herramienta (tools.py) se invoca         │
-│      c. Wrapper llama al cliente MCP                        │
-│      d. Cliente MCP envía solicitud al servidor MCP         │
-│      e. Servidor ejecuta herramienta, retorna datos         │
-│      f. Datos retornados al agente                          │
-│    - Agente sintetiza todos los resultados                  │
-│    - Agente genera informe markdown final                   │
-└─────────────────────────────────────────────────────────────┘
-     │
-     ▼
-┌─────────────────────────────────────────────────────────────┐
-│ 4. Respuesta                                                │
-│    - Informe markdown retornado a FastAPI                   │
-│    - FastAPI envuelve en respuesta JSON                     │
-│    - Streamlit muestra informe formateado                   │
-└─────────────────────────────────────────────────────────────┘
+
+**Uso:**
+```python
+from stock_analyzer_bot.tools import comprehensive_performance_report
+
+resultado = comprehensive_performance_report("AAPL", "1y")
+# Devuelve un informe markdown con las 4 estrategias
+```
+
+### Herramientas de BAJO NIVEL (CodeAgent)
+
+Son herramientas **granulares** que CodeAgent combina con código Python.
+
+```python
+from stock_analyzer_bot.tools import LOW_LEVEL_TOOLS
+
+# Herramientas disponibles:
+# - bollinger_fibonacci_analysis: Estrategia individual
+# - macd_donchian_analysis: Estrategia individual
+# - connors_zscore_analysis: Estrategia individual
+# - dual_moving_average_analysis: Estrategia individual
+# - fundamental_analysis_report: Datos financieros para análisis combinado
+```
+
+**Uso:**
+```python
+from stock_analyzer_bot.tools import bollinger_fibonacci_analysis
+
+resultado = bollinger_fibonacci_analysis("AAPL", "1y")
+# Retorna JSON con señal, métricas e interpretación
 ```
 
 ---
 
-## Referencia de Módulos
+## 🤖 Implementaciones de agentes
 
-### 1. `main.py` - ToolCallingAgent
+### ToolCallingAgent (`main.py`)
 
-**Implementación basada en JSON para entornos productivos estables**
+Utiliza herramientas de ALTO NIVEL para análisis sencillos y confiables.
 
-#### Función Principal
 ```python
-async def run_stock_analysis(ticker: str, llm_provider: str = "openai")
-```
+from stock_analyzer_bot.main import (
+    run_technical_analysis,
+    run_market_scanner,
+    run_fundamental_analysis,
+    run_multi_sector_analysis,
+    run_combined_analysis,
+)
 
-**Parámetros:**
-- `ticker`: Símbolo del ticker (ej: "AAPL", "MSFT")
-- `llm_provider`: Proveedor LLM ("openai" o "huggingface")
+# Análisis técnico (1 llamada MCP)
+informe = run_technical_analysis("AAPL", period="1y")
 
-**Características:**
-- ✅ **Una herramienta por turno**: Llamadas de herramientas controladas paso a paso
-- ✅ **Depuración determinista**: Salida JSON predecible
-- ✅ **Manejo robusto de errores**: Menor riesgo de fallos en tiempo de ejecución
-- ⚠️ **Velocidad moderada**: Múltiples llamadas LLM para análisis complejos
+# Escáner de mercado (1 llamada MCP)
+informe = run_market_scanner("AAPL,MSFT,GOOGL", period="1y")
 
-**Caso de Uso Ideal:**
-```python
-# Mejor para análisis de un solo ticker
-result = await run_stock_analysis("AAPL", "openai")
-```
+# Análisis fundamental (1 llamada MCP)
+informe = run_fundamental_analysis("MSFT", period="3y")
 
----
+# Análisis multi-sector (1 llamada por sector)
+informe = run_multi_sector_analysis(
+    sectors={"Banking": "JPM,BAC,WFC", "Tech": "AAPL,MSFT"},
+    period="1y"
+)
 
-### 2. `main_codeagent.py` - CodeAgent
-
-**Implementación basada en código Python para análisis de alto rendimiento**
-
-#### Función Principal
-```python
-async def run_stock_analysis_with_code_agent(
-    ticker: str, 
-    llm_provider: str = "openai",
-    executor: str = "local"
+# Análisis combinado (2 llamadas MCP)
+informe = run_combined_analysis(
+    "TSLA",
+    technical_period="1y",
+    fundamental_period="3y"
 )
 ```
 
-**Parámetros:**
-- `ticker`: Símbolo del ticker (ej: "AAPL", "MSFT")
-- `llm_provider`: Proveedor LLM ("openai" o "huggingface")
-- `executor`: Tipo de executor
-  - `"local"`: Ejecución directa de Python (desarrollo)
-  - `"e2b"`: E2B sandbox en la nube (producción)
-  - `"docker"`: Contenedor Docker (producción autohospedada)
+**Características:**
+- Comportamiento simple y predecible.
+- Una llamada de herramienta produce un resultado completo.
+- Consumo de tokens reducido.
+- Ideal para entornos de producción.
+
+### CodeAgent (`main_codeagent.py`)
+
+Utiliza herramientas de BAJO NIVEL coordinadas mediante código Python.
+
+```python
+from stock_analyzer_bot.main_codeagent import (
+    run_technical_analysis,
+    run_market_scanner,
+    run_fundamental_analysis,
+    run_multi_sector_analysis,
+    run_combined_analysis,
+)
+
+# Análisis técnico (4 llamadas a herramientas dentro de un bucle)
+informe = run_technical_analysis(
+    "AAPL",
+    period="1y",
+    executor_type="local"
+)
+
+# Escáner de mercado (4 * N llamadas con bucles anidados)
+informe = run_market_scanner(
+    "AAPL,MSFT,GOOGL",
+    period="1y",
+    executor_type="local"
+)
+```
 
 **Características:**
-- 🚀 **Múltiples herramientas por turno**: Ejecuta 3-5 herramientas en bucles
-- 🚀 **2-3x más rápido**: Mejoras del 50-66% en análisis multi-ticker
-- ⚠️ **Sandbox obligatorio en producción**: Requiere e2b o Docker para seguridad
-- ⚠️ **Depuración compleja**: Rastreo de código Python generado dinámicamente
+- El LLM escribe código Python para llamar herramientas.
+- Usa bucles para analizar varias acciones con eficiencia.
+- Razonamiento transparente (puedes inspeccionar el código generado).
+- 2-3× más rápido en escenarios multi-acción.
+- Necesita sandbox en producción.
 
-**Caso de Uso Ideal:**
+---
+
+## 📡 Endpoints de API
+
+El módulo `api.py` expone todas las funciones de análisis vía FastAPI.
+
+### Configuración
+
 ```python
-# Mejor para análisis de múltiples tickers o complejo
-# Desarrollo
-result = await run_stock_analysis_with_code_agent("AAPL", "openai", "local")
+# Variables de entorno
+DEFAULT_MODEL_ID = os.getenv("SMOLAGENT_MODEL_ID", "gpt-4o")
+DEFAULT_MODEL_PROVIDER = os.getenv("SMOLAGENT_MODEL_PROVIDER", "litellm")
+DEFAULT_AGENT_TYPE = os.getenv("SMOLAGENT_AGENT_TYPE", "tool_calling")
+DEFAULT_TEMPERATURE = float(os.getenv("SMOLAGENT_TEMPERATURE", "0.1"))
+DEFAULT_MAX_TOKENS = int(os.getenv("SMOLAGENT_MAX_TOKENS", "8192"))
+```
 
-# Producción (E2B)
-result = await run_stock_analysis_with_code_agent("AAPL", "openai", "e2b")
+### Endpoints
 
-# Producción (Docker)
-result = await run_stock_analysis_with_code_agent("AAPL", "openai", "docker")
+#### Health Check
+
+```http
+GET /health
+```
+
+**Respuesta:**
+```json
+{
+  "status": "ok",
+  "version": "2.3.0",
+  "features": ["technical_analysis", "market_scanner", "fundamental_analysis", "multisector", "combined"],
+  "agent_types": {
+    "tool_calling": true,
+    "code_agent": true
+  },
+  "default_agent_type": "tool_calling"
+}
+```
+
+#### Análisis técnico
+
+```http
+POST /technical
+Content-Type: application/json
+
+{
+  "symbol": "AAPL",
+  "period": "1y",
+  "agent_type": "tool_calling",
+  "model_id": "gpt-4o",
+  "max_steps": 25
+}
+```
+
+**ToolCallingAgent:** llama a `comprehensive_performance_report` (1 llamada).
+
+**CodeAgent:** ejecuta 4 herramientas individuales con orquestación en código.
+
+#### Escáner de mercado
+
+```http
+POST /scanner
+Content-Type: application/json
+
+{
+  "symbols": "AAPL,MSFT,GOOGL,META,NVDA",
+  "period": "1y",
+  "agent_type": "code_agent"
+}
+```
+
+**ToolCallingAgent:** llama a `unified_market_scanner`.
+
+**CodeAgent:** itera por acción y estrategia.
+
+#### Análisis fundamental
+
+```http
+POST /fundamental
+Content-Type: application/json
+
+{
+  "symbol": "MSFT",
+  "period": "3y",
+  "agent_type": "tool_calling"
+}
+```
+
+Utiliza `fundamental_analysis_report` con más de 70 alias.
+
+#### Análisis multi-sector
+
+```http
+POST /multisector
+Content-Type: application/json
+
+{
+  "sectors": [
+    {"name": "Banking", "symbols": "JPM,BAC,WFC"},
+    {"name": "Technology", "symbols": "AAPL,MSFT,GOOGL"}
+  ],
+  "period": "1y",
+  "agent_type": "code_agent"
+}
+```
+
+**ToolCallingAgent:** llama `unified_market_scanner` por sector.
+
+**CodeAgent:** usa bucles anidados (sector → acción → estrategia).
+
+#### Análisis combinado
+
+```http
+POST /combined
+Content-Type: application/json
+
+{
+  "symbol": "TSLA",
+  "technical_period": "1y",
+  "fundamental_period": "3y",
+  "agent_type": "tool_calling"
+}
+```
+
+Combina análisis técnico (4 estrategias) y fundamental en una sola tesis.
+
+### Formato de respuesta
+
+```json
+{
+  "report": "# AAPL Comprehensive Technical Analysis\n...",
+  "symbol": "AAPL",
+  "analysis_type": "technical",
+  "duration_seconds": 35.2,
+  "agent_type": "tool_calling",
+  "tools_approach": "HIGH-LEVEL tools (comprehensive reports in single MCP calls)"
+}
 ```
 
 ---
 
-### 3. `api.py` - Endpoints FastAPI
+## ⚙️ Configuración
 
-### Flujo de Ejecución de Herramientas
+### Parámetros del agente
 
-Cuando el agente decide llamar una herramienta:
+```python
+# Ajustes de modelo
+DEFAULT_MODEL_ID = "gpt-4o"
+DEFAULT_MODEL_PROVIDER = "litellm"
+DEFAULT_TEMPERATURE = 0.1
+DEFAULT_MAX_TOKENS = 8192
 
+# Ajustes del agente
+DEFAULT_MAX_STEPS = 25
+DEFAULT_EXECUTOR = "local"  # local, e2b o docker
 ```
-Decisión del Agente: "Necesito llamar bollinger_fibonacci_analysis para AAPL"
-          │
-          ▼
-    ┌─────────────────────────────────────────────┐
-    │ @tool                                       │
-    │ def bollinger_fibonacci_analysis(symbol):   │
-    │     return _call_finance_tool(              │
-    │         "analyze_bollinger_fibonacci_...",  │
-    │         {"symbol": symbol, "period": "1y"}  │
-    │     )                                       │
-    └─────────────────────────────────────────────┘
-          │
-          ▼
-    ┌─────────────────────────────────────────────┐
-    │ _call_finance_tool()                        │
-    │     session = get_session()                 │
-    │     return session.call_tool(name, params)  │
-    └─────────────────────────────────────────────┘
-          │
-          ▼
-    ┌─────────────────────────────────────────────┐
-    │ MCPFinanceSession.call_tool()               │
-    │     # Envía JSON-RPC al servidor MCP        │
-    │     # vía transporte stdio                  │
-    └─────────────────────────────────────────────┘
-          │
-          ▼
-    ┌─────────────────────────────────────────────┐
-    │ Servidor MCP (server/main.py)               │
-    │     # Ejecuta cálculo de estrategia         │
-    │     # Retorna datos de rendimiento          │
-    └─────────────────────────────────────────────┘
-          │
-          ▼
-    Los datos fluyen de vuelta al agente
+
+### Tipos de ejecutor (solo CodeAgent)
+
+| Tipo | Seguridad | Configuración | Caso de uso |
+|------|-----------|---------------|-------------|
+| `local` | ⚠️ Baja | Ninguna | Desarrollo |
+| `e2b` | ✅ Alta | Cuenta E2B | Producción |
+| `docker` | ✅ Alta | Docker instalado | Auto-hospedado |
+
+**Configurar e2b:**
+```bash
+pip install 'smolagents[e2b]'
+setx E2B_API_KEY your-key
+```
+
+**Configurar Docker:**
+```bash
+pip install 'smolagents[docker]'
+# Asegúrate de que el demonio de Docker esté activo
 ```
 
 ---
 
-## Instalación
+## 📝 Plantillas de prompts
 
-### Prerrequisitos
+Todos los prompts siguen reglas de formato estrictas:
 
-- Python 3.10+
-- Servidor MCP (carpeta `server/` en la raíz del proyecto)
-- Clave API de OpenAI (o token de HuggingFace)
+### Reglas de formato
 
-### Dependencias
+1. **Moneda:** usar el prefijo "USD" en lugar del símbolo `$`.
+2. **Tablas:** evitar el uso de `|` en tablas para minimizar problemas en Streamlit.
+3. **Estructura:** cada métrica en su propia línea.
+4. **Encabezados:** secciones numeradas y jerárquicas.
+5. **Sin cursivas:** evitar `*texto*`.
 
-```bash
-pip install smolagents fastapi uvicorn streamlit requests python-dotenv mcp
+### Prompt de análisis técnico
+
+```
+1. EXECUTIVE SUMMARY
+   - Recomendación general (BUY/HOLD/SELL)
+   - Nivel de confianza
+   - Métricas clave
+
+2. STRATEGY ANALYSIS
+   - Bollinger-Fibonacci: señal, métricas, interpretación
+   - MACD-Donchian: señal, métricas, interpretación
+   - Connors RSI-ZScore: señal, métricas, interpretación
+   - Dual Moving Average: señal, métricas, interpretación
+
+3. RISK ASSESSMENT
+   - Guía de tamaño de posición
+   - Niveles de stop loss
+
+4. FINAL RECOMMENDATION
+   - Conclusión accionable
 ```
 
-### Inicio Rápido
+### Prompt del escáner de mercado
 
-```bash
-# 1. Iniciar el backend FastAPI
-uvicorn stock_analyzer_bot.api:app --reload --port 8000
+```
+1. MARKET OVERVIEW
+   - Total de acciones analizadas
+   - Condiciones de mercado
 
-# 2. (Opcional) Iniciar frontend Streamlit
-streamlit run streamlit_app.py
+2. RANKED OPPORTUNITIES
+   - Ranking con puntuaciones
+   - Cinco estrategias por acción:
+     * Bollinger Z-Score
+     * Bollinger-Fibonacci
+     * MACD-Donchian
+     * Connors RSI-ZScore
+     * Dual Moving Average
 
-# 3. (Opcional) Ejecutar análisis CLI
-python -m stock_analyzer_bot.main AAPL --period 1y
+3. TOP RECOMMENDATIONS
+   - Mejores oportunidades con razonamiento
+
+4. PORTFOLIO ALLOCATION
+   - Porcentajes sugeridos
 ```
 
 ---
 
-## Configuración
+## 🧪 Ejemplos de uso
 
-### Variables de Entorno
+### Python - Importación directa
 
-Crear un archivo `.env` en la raíz del proyecto:
+```python
+from stock_analyzer_bot.tools import configure_finance_tools, shutdown_finance_tools
+
+# Inicializar conexión MCP
+configure_finance_tools()
+
+try:
+    # ToolCallingAgent
+    from stock_analyzer_bot.main import run_technical_analysis
+    report = run_technical_analysis(symbol="AAPL", period="1y")
+
+    # CodeAgent
+    from stock_analyzer_bot.main_codeagent import run_market_scanner
+    report = run_market_scanner(
+        symbols="AAPL,MSFT,GOOGL",
+        period="1y",
+        executor_type="local"
+    )
+
+    print(report)
+finally:
+    shutdown_finance_tools()
+```
+
+### CLI - ToolCallingAgent
 
 ```bash
-# Configuración LLM
-OPENAI_API_KEY=sk-tu-clave-openai-aqui
-OPENAI_BASE_URL=                      # Opcional: para endpoints personalizados
-HF_TOKEN=hf_tu-token-huggingface      # Para modelos HuggingFace
+python -m stock_analyzer_bot.main AAPL --mode technical --period 1y
+python -m stock_analyzer_bot.main "AAPL,MSFT" --mode scanner
+python -m stock_analyzer_bot.main MSFT --mode fundamental
+```
 
-# Configuración de Agente (NUEVO)
-SMOLAGENT_AGENT_TYPE=tool_calling     # "tool_calling" o "code_agent"
-SMOLAGENT_EXECUTOR=local              # Para CodeAgent: "local" | "e2b" | "docker"
+### CLI - CodeAgent
 
-# Valores Predeterminados del Modelo
-SMOLAGENT_MODEL_ID=gpt-4.1            # Modelo predeterminado
-SMOLAGENT_MODEL_PROVIDER=litellm       # litellm o inference
-SMOLAGENT_MAX_STEPS=25                 # Máx iteraciones del agente
+```bash
+python -m stock_analyzer_bot.main_codeagent AAPL --mode technical --executor local
+python -m stock_analyzer_bot.main_codeagent "AAPL,MSFT,GOOGL" --mode scanner
+python -m stock_analyzer_bot.main_codeagent TSLA --mode combined
+```
 
-# Configuración de Executor de CodeAgent
-E2B_API_KEY=e2b_tu-clave-api          # Necesario para executor="e2b"
-DOCKER_IMAGE=python:3.11-slim         # Necesario para executor="docker"
+### cURL - API
+
+```bash
+# Análisis técnico con ToolCallingAgent
+curl -X POST "http://localhost:8000/technical" \
+  -H "Content-Type: application/json" \
+  -d '{"symbol": "AAPL", "agent_type": "tool_calling"}'
+
+# Escáner con CodeAgent
+curl -X POST "http://localhost:8000/scanner" \
+  -H "Content-Type: application/json" \
+  -d '{"symbols": "AAPL,MSFT", "agent_type": "code_agent"}'
+
+# Multi-sector con CodeAgent (recomendado)
+curl -X POST "http://localhost:8000/multisector" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sectors": [
+      {"name": "Banking", "symbols": "JPM,BAC,WFC"},
+      {"name": "Tech", "symbols": "AAPL,MSFT,GOOGL"}
+    ],
+    "agent_type": "code_agent"
+  }'
+```
+
+---
+
+## 📊 Comparativa de rendimiento
+
+### Benchmarks: ToolCallingAgent vs CodeAgent
+
+| Escenario | ToolCallingAgent | CodeAgent (local) | Mejora |
+|-----------|-----------------|-------------------|--------|
+| Acción única (4 estrategias) | ~45 s | ~40 s | 10% |
+| Comparación de 3 acciones | ~180 s | ~90 s | 50% |
+| Comparación de 5 acciones | ~300 s | ~100 s | 66% |
+| Multi-sector (3 sectores) | ~600 s | ~200 s | 66% |
+
+**Conclusiones:**
+- ✅ CodeAgent es 2-3× más rápido consolidando varias acciones.
+- ✅ ToolCallingAgent es más estable para análisis simples.
+- ⚠️ CodeAgent necesita sandbox (e2b/docker) en producción.
+
+---
+
+## 🛠️ Solución de problemas
+
+### Problemas comunes
+
+| Problema | Causa | Solución |
+|----------|-------|----------|
+| "CodeAgent not available" | Falta `main_codeagent.py` | Verifica en `stock_analyzer_bot/` |
+| "MCP server not found" | Ruta incorrecta | Asegura que `server/main.py` exista |
+| "Connection refused" | FastAPI no iniciado | Ejecuta `uvicorn stock_analyzer_bot.api:app --port 8000` |
+| "Code execution failed" | Python inválido generado | Usa un modelo distinto (gpt-4o recomendado) |
+| "Timeout" | Demasiadas acciones | Reduce la lista o usa CodeAgent |
+| "Authentication error" | API key inválida | Revisa `OPENAI_API_KEY` |
+| "Import not allowed" | Restricción del sandbox | Añade a `additional_authorized_imports` |
+| "Truncated output" | Falta de tokens | Aumenta `max_tokens` a 8192+ |
+| "LaTeX formatting" | Uso del símbolo `$` | El código emplea prefijo USD |
+
+### Consejos de depuración
+
+**Activar logging detallado:**
+```python
+agent = CodeAgent(
+    tools=tools,
+    model=model,
+    verbosity_level=2,
+)
+```
+
+**Inspeccionar el razonamiento:**
+```python
+resultado = agent.run(prompt)
+print(agent.logs)
+```
+
+**Probar la conexión MCP:**
+```python
+from stock_analyzer_bot.tools import configure_finance_tools
+from stock_analyzer_bot.mcp_client import get_session
+
+configure_finance_tools()
+session = get_session()
+print(f"Sesión activa: {session is not None}")
+```
+
+---
+
+## 📚 Documentación relacionada
+
+- [README raíz](../README.md)
+- [README del servidor](../server/README.md)
+- [Documentación de smolagents](https://huggingface.co/docs/smolagents/index)
+- [Secure Code Execution](https://huggingface.co/docs/smolagents/tutorials/secure_code_execution)
+
+---
+
+## 🔄 Cambios recientes
+
+### v2.3.0 – Formato de salida y estabilidad
+
+- Temperatura fijada en 0.1 para salidas más deterministas.
+- Formato de moneda: prefijo USD en lugar de símbolo `$`.
+- Límite de tokens ampliado a 8192 por defecto.
+- Escáner de mercado: restauradas MACD-Donchian y Connors RSI-ZScore.
+- Plantillas: resueltos conflictos de formato en cadenas Python.
+- Helper `format_agent_result()` para limpiar la salida.
+
+### v2.2.0 – Mejoras de análisis fundamental
+
+- Más de 70 alias para obtener datos con yfinance.
+- Matching multinivel: exacto → alias → substring.
+- Ratios financieros adicionales en 4 categorías.
+- Fallbacks elegantes cuando faltan datos.
+
+### v2.1.0 – Arquitectura dual de agentes
+
+- Añadido CodeAgent para bucles eficientes en Python.
+- Ejecutores soportados: local, e2b y docker.
+- Separación entre herramientas de ALTO y BAJO nivel.
+- Selección de agente vía API por cada petición.
+
+---
+
+<p align="center">
+  <i>Stock Analyzer Bot v2.3.0 – Soporte dual con ToolCallingAgent y CodeAgent</i>
+</p>
 
 # Valores Predeterminados de Análisis
 DEFAULT_ANALYSIS_PERIOD=1y
