@@ -571,6 +571,3 @@ print(f"Session active: {session is not None}")
 
 ---
 
-<p align="center">
-  <i>Stock Analyzer Bot v2.3.0 - Dual agent support with ToolCallingAgent & CodeAgent</i>
-</p>

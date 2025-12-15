@@ -653,7 +653,3 @@ This project is provided for educational purposes. Users must comply with:
 
 ---
 
-<p align="center">
-  <b>Built with ❤️ using smolagents, MCP, FastAPI, and Streamlit</b><br>
-  <i>Now with dual agent support: ToolCallingAgent & CodeAgent</i>
-</p>
